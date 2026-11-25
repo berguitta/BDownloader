@@ -240,7 +240,11 @@ pub struct Engine {
 impl Engine {
     pub fn new() -> Result<Self> {
         let client = reqwest::Client::builder()
-            .user_agent(concat!("BDownloader/", env!("CARGO_PKG_VERSION")))
+            // Some hosters answer 403/404 to unknown clients: look like a browser.
+            .user_agent(concat!(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 BDownloader/",
+                env!("CARGO_PKG_VERSION")
+            ))
             .connect_timeout(Duration::from_secs(15))
             .read_timeout(Duration::from_secs(30))
             .build()?;

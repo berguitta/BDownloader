@@ -113,7 +113,7 @@ pub const BUILTIN_MODULES: &[ModuleInfo] = &[
     ModuleInfo {
         id: "click-n-load",
         name: "Click'n'Load",
-        description: "Local listener on 127.0.0.1:9666 for link sites. No web interface, links go to the link grabber.",
+        description: "Lets download sites send links to BDownloader with their Click'n'Load button. Listens on this computer only.",
         category: Category::LinkSource,
         status: ModuleStatus::Available,
         default_enabled: false,
@@ -249,10 +249,73 @@ pub const BUILTIN_MODULES: &[ModuleInfo] = &[
     ModuleInfo {
         id: "torrent",
         name: "BitTorrent and magnet links",
-        description: "Downloads torrents next to your DDL queue.",
+        description: "Downloads torrents next to your DDL queue, then seeds up to the ratio you chose.",
         category: Category::Protocol,
-        status: ModuleStatus::Planned,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &[],
+    },
+    ModuleInfo {
+        id: "decrypters",
+        name: "Folder and list decrypters",
+        description: "Expands 1fichier folders, MediaFire folders and Pixeldrain lists into their files.",
+        category: Category::LinkSource,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &["http"],
+    },
+    ModuleInfo {
+        id: "scheduler",
+        name: "Scheduler",
+        description: "Starts, pauses, limits the speed, reconnects or turns the computer off on a schedule.",
+        category: Category::Core,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &[],
+    },
+    ModuleInfo {
+        id: "reconnect",
+        name: "Reconnect",
+        description: "Gets a new IP from your internet box (UPnP or a command) to skip free hoster wait timers.",
+        category: Category::Core,
+        status: ModuleStatus::Available,
         default_enabled: false,
+        requires: &[],
+    },
+    ModuleInfo {
+        id: "power",
+        name: "Power actions",
+        description: "Closes BDownloader, puts the computer to sleep or turns it off when the queue is finished.",
+        category: Category::Interface,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &[],
+    },
+    ModuleInfo {
+        id: "anti-standby",
+        name: "Anti-standby",
+        description: "Keeps the computer awake while downloads or extractions are running.",
+        category: Category::Interface,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &[],
+    },
+    ModuleInfo {
+        id: "event-scripts",
+        name: "Event scripts",
+        description: "Sends Discord or Telegram messages and runs your own command when downloads finish or fail.",
+        category: Category::PostProcessing,
+        status: ModuleStatus::Available,
+        default_enabled: false,
+        requires: &[],
+    },
+    ModuleInfo {
+        id: "checksum",
+        name: "Checksum verification",
+        description: "Checks finished packages against their .sfv, .md5, .sha1 or .sha256 files.",
+        category: Category::PostProcessing,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &[],
     },
     ModuleInfo {
@@ -380,7 +443,7 @@ mod tests {
         let reg = ModuleRegistry::builtin();
         assert!(reg.is_enabled("http"));
         assert!(reg.is_enabled("multi-connection"));
-        assert!(!reg.is_enabled("torrent"), "planned modules are off");
+        assert!(reg.is_enabled("torrent"));
         assert!(!reg.is_enabled("nope"));
     }
 
@@ -406,7 +469,7 @@ mod tests {
     #[test]
     fn planned_modules_cannot_be_enabled() {
         let mut reg = ModuleRegistry::builtin();
-        assert_eq!(reg.set_enabled("torrent", true), Err(ModuleError::NotAvailable("torrent")));
+        assert!(reg.set_enabled("torrent", true).is_ok());
     }
 
     #[test]

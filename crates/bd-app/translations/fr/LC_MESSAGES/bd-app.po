@@ -537,3 +537,70 @@ msgstr "Aucun réglage trouvé. Essayez \"débit\", \"captcha\" ou \"dossier\"."
 msgid "{} advanced options hidden. Turn on Show advanced to see them."
 msgstr "{} options avancées masquées. Activez « Afficher les options avancées » pour les voir."
 
+
+msgid "Open BDownloader"
+msgstr "Ouvrir BDownloader"
+
+msgid "Close"
+msgstr "Fermer"
+
+msgid "Mini mode"
+msgstr "Mode mini"
+
+msgid "Help and documentation"
+msgstr "Aide et documentation"
+
+msgid "Rules run every day they match. Speed limits and pauses apply between the two times; starting, stopping, reconnecting and turning off happen at the first time."
+msgstr "Les règles s'appliquent chaque jour concerné. Les limites de débit et les pauses valent entre les deux heures ; le lancement, l'arrêt, la reconnexion et l'extinction ont lieu à la première heure."
+
+msgid "Every day"
+msgstr "Tous les jours"
+
+msgid "Weekdays"
+msgstr "En semaine"
+
+msgid "Weekends"
+msgstr "Le week-end"
+
+msgid "Monday"
+msgstr "Lundi"
+
+msgid "Tuesday"
+msgstr "Mardi"
+
+msgid "Wednesday"
+msgstr "Mercredi"
+
+msgid "Thursday"
+msgstr "Jeudi"
+
+msgid "Friday"
+msgstr "Vendredi"
+
+msgid "Saturday"
+msgstr "Samedi"
+
+msgid "Sunday"
+msgstr "Dimanche"
+
+msgid "Limit the speed to"
+msgstr "Limiter le débit à"
+
+msgid "Pause everything"
+msgstr "Tout mettre en pause"
+
+msgid "Start all downloads"
+msgstr "Lancer tous les téléchargements"
+
+msgid "Pause all downloads"
+msgstr "Mettre en pause tous les téléchargements"
+
+msgid "Get a new IP"
+msgstr "Obtenir une nouvelle IP"
+
+msgid "Turn off the computer"
+msgstr "Éteindre l'ordinateur"
+
+msgid "Add a rule"
+msgstr "Ajouter une règle"
+

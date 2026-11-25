@@ -8,6 +8,14 @@ use url::Url;
 pub fn extract_links(text: &str) -> Vec<Url> {
     let mut found: Vec<Url> = Vec::new();
     for raw in text.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']')) {
+        if let Some(pos) = raw.find("magnet:?") {
+            if let Ok(url) = Url::parse(raw[pos..].trim_end_matches(['.', ',', ';'])) {
+                if !found.contains(&url) {
+                    found.push(url);
+                }
+            }
+            continue;
+        }
         let Some(start) = find_scheme(raw) else { continue };
         let candidate = raw[start..].trim_end_matches(['.', ',', ';', ':', '!', '?']);
         let normalized = if let Some(rest) = candidate.strip_prefix("hxxps://") {

@@ -22,6 +22,8 @@ pub enum Kind {
     },
     Text(&'static str),
     Path,
+    /// A button running an action (English, French label).
+    Button(&'static str, &'static str),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -29,8 +31,6 @@ pub enum Status {
     Ready,
     /// Takes effect after restarting BDownloader.
     Restart,
-    /// Shown so users see it is coming, not editable yet.
-    Planned,
 }
 
 pub struct Def {
@@ -45,7 +45,8 @@ pub struct Def {
     pub status: Status,
 }
 
-/// (English, French). The "Modules" section is filled from the registry.
+/// (English, French). Some sections have extra content built in the UI
+/// (tools for video, the rule editor for the scheduler, modules).
 pub const CATEGORIES: &[(&str, &str)] = &[
     ("General", "Général"),
     ("Connection", "Connexion"),
@@ -56,13 +57,17 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ("Video (yt-dlp)", "Vidéo (yt-dlp)"),
     ("Torrent", "Torrent"),
     ("Clipboard & Click'n'Load", "Presse-papiers et Click'n'Load"),
+    ("Scheduler", "Planificateur"),
+    ("Reconnect", "Reconnexion"),
+    ("Event scripts", "Scripts d'événements"),
+    ("Checksums", "Sommes de contrôle"),
     ("Interface", "Interface"),
     ("Language", "Langue"),
     ("Modules", "Modules"),
     ("Advanced", "Avancé"),
 ];
 
-pub const MODULES_CATEGORY: usize = 11;
+pub const MODULES_CATEGORY: usize = 15;
 
 pub fn category_name(index: usize) -> &'static str {
     let (en, fr) = CATEGORIES[index.min(CATEGORIES.len() - 1)];
@@ -92,11 +97,6 @@ const fn adv(mut def: Def) -> Def {
 
 const fn restart(mut def: Def) -> Def {
     def.status = Status::Restart;
-    def
-}
-
-const fn planned(mut def: Def) -> Def {
-    def.status = Status::Planned;
     def
 }
 
@@ -157,14 +157,15 @@ pub const DEFS: &[Def] = &[
         "when-done",
         "When the queue is finished",
         "Quand la file est terminée",
-        "",
-        "",
+        "Power actions module.",
+        "Module Actions d'alimentation.",
         Kind::Select {
             default: "nothing",
             options: &[
                 ("nothing", "Do nothing", "Ne rien faire"),
                 ("close", "Close BDownloader", "Fermer BDownloader"),
                 ("sleep", "Sleep", "Mettre en veille"),
+                ("hibernate", "Hibernate", "Mettre en veille prolongée"),
                 ("shutdown", "Shut down", "Éteindre l'ordinateur"),
             ],
         },
@@ -251,31 +252,6 @@ pub const DEFS: &[Def] = &[
         "",
         num(5, 0, 50, "times"),
     ))),
-    planned(adv(d(
-        1,
-        "schedule",
-        "Speed limit schedule",
-        "Planning de limite de débit",
-        "For example 1 MB/s from 9:00 to 18:00.",
-        "Par exemple 1 Mo/s de 9 h à 18 h.",
-        Kind::Toggle(false),
-    ))),
-    planned(adv(d(
-        1,
-        "reconnect",
-        "Get a new IP when a hoster makes you wait",
-        "Changer d'IP quand un hébergeur fait attendre",
-        "",
-        "",
-        Kind::Select {
-            default: "off",
-            options: &[
-                ("off", "Off", "Non"),
-                ("upnp", "Router via UPnP", "Routeur via UPnP"),
-                ("script", "Custom script", "Script personnalisé"),
-            ],
-        },
-    ))),
     // Downloads
     d(
         2,
@@ -293,6 +269,15 @@ pub const DEFS: &[Def] = &[
             ],
         },
     ),
+    d(
+        2,
+        "min-free",
+        "Pause when free disk space is under",
+        "Mettre en pause sous cet espace disque libre",
+        "Checked on the download folder's drive. 0 turns it off.",
+        "Vérifié sur le disque du dossier de téléchargement. 0 désactive.",
+        num(5, 0, 2000, "GB"),
+    ),
     adv(d(
         2,
         "preallocate",
@@ -301,24 +286,6 @@ pub const DEFS: &[Def] = &[
         "Avoids fragmentation on hard drives.",
         "Évite la fragmentation sur les disques durs.",
         Kind::Toggle(true),
-    )),
-    planned(d(
-        2,
-        "verify-hash",
-        "Verify checksums when the hoster gives one",
-        "Vérifier les sommes de contrôle fournies par l'hébergeur",
-        "",
-        "",
-        Kind::Toggle(true),
-    )),
-    planned(d(
-        2,
-        "min-free",
-        "Pause when free disk space is under",
-        "Mettre en pause sous cet espace disque libre",
-        "",
-        "",
-        num(5, 0, 500, "GB"),
     )),
     // Hosters & accounts
     d(
@@ -339,15 +306,15 @@ pub const DEFS: &[Def] = &[
         "Temps d'attente quand aucun compte n'est utilisable. Les captchas s'ouvrent dans votre navigateur.",
         Kind::Toggle(true),
     ),
-    planned(adv(d(
+    adv(d(
         3,
         "account-check",
         "Re-check accounts every",
         "Revérifier les comptes toutes les",
-        "",
-        "",
+        "Keeps the premium status and expiry up to date.",
+        "Garde à jour le statut premium et l'échéance.",
         num(6, 1, 72, "hours"),
-    ))),
+    )),
     // Captcha
     d(
         4,
@@ -414,15 +381,15 @@ pub const DEFS: &[Def] = &[
         "La liste est sur l'écran Extraction.",
         Kind::Toggle(true),
     ),
-    planned(adv(d(
+    adv(d(
         5,
         "nested",
         "Extract archives inside archives",
         "Extraire les archives contenues dans les archives",
-        "",
-        "",
+        "One level deep.",
+        "Sur un niveau.",
         Kind::Toggle(true),
-    ))),
+    )),
     // Video
     d(
         6,
@@ -484,17 +451,25 @@ pub const DEFS: &[Def] = &[
         Kind::Toggle(true),
     ),
     // Torrent
-    planned(d(7, "torrent-port", "Listening port", "Port d'écoute", "", "", num(51413, 1024, 65535, ""))),
-    planned(d(
+    restart(d(7, "torrent-port", "Listening port", "Port d'écoute", "", "", num(51413, 1024, 65535, ""))),
+    restart(d(
         7,
         "torrent-upload",
         "Upload limit",
         "Limite d'envoi",
         "0 means unlimited.",
         "0 = illimité.",
-        num(2, 0, 1000, "MB/s"),
+        num(2048, 0, 1_000_000, "KB/s"),
     )),
-    planned(d(7, "torrent-ratio", "Stop seeding at ratio", "Arrêter le partage au ratio", "", "", num(1, 0, 10, ""))),
+    d(
+        7,
+        "torrent-ratio",
+        "Stop seeding at ratio",
+        "Arrêter le partage au ratio",
+        "1 means you give back as much as you downloaded. 0 stops at once.",
+        "1 = vous rendez autant que vous avez téléchargé. 0 arrête tout de suite.",
+        num(1, 0, 10, "×"),
+    ),
     // Clipboard & Click'n'Load
     d(
         8,
@@ -505,9 +480,106 @@ pub const DEFS: &[Def] = &[
         "9666 est le port standard utilisé par les sites de liens.",
         num(9666, 1024, 65535, ""),
     ),
+    // Scheduler: rules are edited in their own editor.
+    // Reconnect
+    d(
+        10,
+        "reconnect-method",
+        "How to get a new IP",
+        "Comment obtenir une nouvelle IP",
+        "",
+        "",
+        Kind::Select {
+            default: "upnp",
+            options: &[
+                ("upnp", "Internet box (UPnP)", "Box internet (UPnP)"),
+                ("script", "Custom command", "Commande personnalisée"),
+            ],
+        },
+    ),
+    d(
+        10,
+        "reconnect-script",
+        "Custom command",
+        "Commande personnalisée",
+        "Run with cmd /C, e.g. a script that restarts your connection.",
+        "Lancée avec cmd /C, par ex. un script qui relance votre connexion.",
+        Kind::Text(""),
+    ),
+    d(
+        10,
+        "reconnect-after",
+        "Reconnect when a hoster asks to wait at least",
+        "Reconnecter quand un hébergeur fait attendre au moins",
+        "",
+        "",
+        num(5, 1, 120, "min"),
+    ),
+    d(
+        10,
+        "reconnect-now",
+        "Test the reconnection",
+        "Tester la reconnexion",
+        "Your internet is cut for a few seconds.",
+        "Votre connexion est coupée quelques secondes.",
+        Kind::Button("Reconnect now", "Reconnecter maintenant"),
+    ),
+    // Event scripts
+    d(
+        11,
+        "discord-webhook",
+        "Discord webhook URL",
+        "URL du webhook Discord",
+        "Server settings › Integrations › Webhooks.",
+        "Paramètres du serveur › Intégrations › Webhooks.",
+        Kind::Text(""),
+    ),
+    d(
+        11,
+        "telegram-token",
+        "Telegram bot token",
+        "Jeton du bot Telegram",
+        "Given by @BotFather.",
+        "Fourni par @BotFather.",
+        Kind::Text(""),
+    ),
+    d(11, "telegram-chat", "Telegram chat id", "Identifiant de la conversation Telegram", "", "", Kind::Text("")),
+    d(
+        11,
+        "script-command",
+        "Command to run",
+        "Commande à lancer",
+        "{event}, {name}, {path} and {package} are replaced.",
+        "{event}, {name}, {path} et {package} sont remplacés.",
+        Kind::Text(""),
+    ),
+    d(
+        11,
+        "event-finished",
+        "When a download finishes",
+        "Quand un téléchargement se termine",
+        "",
+        "",
+        Kind::Toggle(false),
+    ),
+    d(11, "event-package", "When a package finishes", "Quand un paquet se termine", "", "", Kind::Toggle(true)),
+    d(11, "event-failed", "When a download fails", "Quand un téléchargement échoue", "", "", Kind::Toggle(true)),
+    d(11, "event-extracted", "When an extraction ends", "Quand une extraction se termine", "", "", Kind::Toggle(true)),
+    d(11, "event-queue-done", "When the queue is finished", "Quand la file est terminée", "", "", Kind::Toggle(true)),
+    d(11, "event-test", "Send a test message", "Envoyer un message de test", "", "", Kind::Button("Test", "Tester")),
+    // Checksums
+    d(
+        12,
+        "verify-hash",
+        "Verify packages with their checksum files",
+        "Vérifier les paquets avec leurs fichiers de sommes de contrôle",
+        "Uses .sfv, .md5, .sha1 and .sha256 files found next to the downloads.",
+        "Utilise les fichiers .sfv, .md5, .sha1 et .sha256 trouvés à côté des téléchargements.",
+        Kind::Toggle(true),
+    ),
     // Interface
     d(
-        9,
+        13,
         "theme",
         "Theme",
         "Thème",
@@ -523,7 +595,7 @@ pub const DEFS: &[Def] = &[
         },
     ),
     d(
-        9,
+        13,
         "density",
         "List density",
         "Densité des listes",
@@ -535,7 +607,7 @@ pub const DEFS: &[Def] = &[
         },
     ),
     d(
-        9,
+        13,
         "notifications",
         "Notifications",
         "Notifications",
@@ -551,8 +623,25 @@ pub const DEFS: &[Def] = &[
             ],
         },
     ),
+    d(
+        13,
+        "mini-corner",
+        "Mini window corner",
+        "Coin de la mini fenêtre",
+        "",
+        "",
+        Kind::Select {
+            default: "top-right",
+            options: &[
+                ("top-right", "Top right", "En haut à droite"),
+                ("top-left", "Top left", "En haut à gauche"),
+                ("bottom-right", "Bottom right", "En bas à droite"),
+                ("bottom-left", "Bottom left", "En bas à gauche"),
+            ],
+        },
+    ),
     adv(d(
-        9,
+        13,
         "speed-in-title",
         "Show speed in the window title",
         "Afficher la vitesse dans le titre de la fenêtre",
@@ -560,9 +649,18 @@ pub const DEFS: &[Def] = &[
         "",
         Kind::Toggle(false),
     )),
+    adv(d(
+        13,
+        "keep-screen-on",
+        "Keep the screen on during downloads",
+        "Garder l'écran allumé pendant les téléchargements",
+        "Anti-standby module. By default only the computer stays awake.",
+        "Module anti-veille. Par défaut seul l'ordinateur reste éveillé.",
+        Kind::Toggle(false),
+    )),
     // Language
     d(
-        10,
+        14,
         "language",
         "Interface language",
         "Langue de l'interface",
@@ -572,7 +670,7 @@ pub const DEFS: &[Def] = &[
     ),
     // Advanced
     restart(adv(d(
-        12,
+        16,
         "log-level",
         "Log level",
         "Niveau de journal",
@@ -588,16 +686,83 @@ pub const DEFS: &[Def] = &[
             ],
         },
     ))),
-    planned(adv(d(
-        12,
+    restart(adv(d(
+        16,
         "portable",
         "Portable mode",
         "Mode portable",
-        "Keep settings next to the .exe.",
-        "Garder les réglages à côté du .exe.",
+        "Keep settings and data next to the .exe, for a USB stick.",
+        "Garder réglages et données à côté du .exe, pour une clé USB.",
         Kind::Toggle(false),
     ))),
 ];
+
+/// Longer explanations shown behind the "i" button: (English, French).
+pub fn info(id: &str) -> Option<(&'static str, &'static str)> {
+    Some(match id {
+        "clicknload-port" => (
+            "Click'n'Load lets download sites send their links straight to BDownloader: when you click the site's Click'n'Load button, the links appear in the link grabber. BDownloader listens only on your own computer (127.0.0.1), never on the network.",
+            "Click'n'Load permet aux sites de téléchargement d'envoyer leurs liens directement à BDownloader : quand vous cliquez sur le bouton Click'n'Load du site, les liens arrivent dans la capture de liens. BDownloader n'écoute que sur votre propre ordinateur (127.0.0.1), jamais sur le réseau.",
+        ),
+        "proxy" => (
+            "A proxy sends all traffic through another server. Keep \"System settings\" unless you know you need one.",
+            "Un proxy fait passer tout le trafic par un autre serveur. Gardez « Réglages du système » sauf si vous savez en avoir besoin.",
+        ),
+        "per-host" => (
+            "Some servers refuse too many simultaneous connections. BDownloader starts with this limit and lowers it by itself when a server answers \"too many requests\".",
+            "Certains serveurs refusent trop de connexions simultanées. BDownloader part de cette limite et la baisse tout seul quand un serveur répond « trop de requêtes ».",
+        ),
+        "connections" => (
+            "A file is cut into parts downloaded at the same time, which is often much faster. Free hosters usually allow only one.",
+            "Le fichier est découpé en parties téléchargées en même temps, souvent bien plus vite. Les hébergeurs gratuits n'en autorisent en général qu'une.",
+        ),
+        "preallocate" => (
+            "The full file size is reserved on disk at the start: the file is not fragmented and you know at once if there is enough space.",
+            "La taille complète du fichier est réservée sur le disque dès le début : le fichier n'est pas fragmenté et vous savez tout de suite s'il y a assez de place.",
+        ),
+        "prefer-debrid" => (
+            "With both a premium account and a debrid service for the same hoster, use the debrid service first.",
+            "Avec à la fois un compte premium et un service debrid pour le même hébergeur, utiliser d'abord le service debrid.",
+        ),
+        "free-fallback" => (
+            "Without an account, BDownloader downloads like a visitor of the site: it waits the timers the site imposes. When the site asks for a captcha, the page opens in your browser.",
+            "Sans compte, BDownloader télécharge comme un visiteur du site : il attend les délais imposés. Quand le site demande un captcha, la page s'ouvre dans votre navigateur.",
+        ),
+        "captcha-mode" => (
+            "A captcha is the \"I am not a robot\" test. BDownloader never solves it for you: it opens the page in your browser, notifies you, or skips the file.",
+            "Un captcha est le test « je ne suis pas un robot ». BDownloader ne le résout jamais à votre place : il ouvre la page dans votre navigateur, vous prévient, ou ignore le fichier.",
+        ),
+        "video-container" => (
+            "The file format of merged videos. mp4 plays everywhere; mkv supports more audio and subtitle tracks.",
+            "Le format des vidéos fusionnées. mp4 se lit partout ; mkv accepte plus de pistes audio et de sous-titres.",
+        ),
+        "torrent-ratio" => (
+            "After downloading, BDownloader keeps sharing until it has sent this many times the size of the torrent, then stops. Sharing back keeps torrents alive.",
+            "Après le téléchargement, BDownloader continue de partager jusqu'à avoir envoyé ce multiple de la taille du torrent, puis s'arrête. Partager en retour fait vivre les torrents.",
+        ),
+        "reconnect-method" => (
+            "Free hosters count the downloads per IP address. Getting a new IP from your internet box lets you skip their wait timer. UPnP must be enabled on the box.",
+            "Les hébergeurs gratuits comptent les téléchargements par adresse IP. Obtenir une nouvelle IP de votre box permet d'éviter leur temps d'attente. L'UPnP doit être activé sur la box.",
+        ),
+        "script-command" => (
+            "Any program or script, started after the chosen events. Example: a script that converts videos with ffmpeg, or that moves files.",
+            "N'importe quel programme ou script, lancé après les événements choisis. Exemple : un script qui convertit des vidéos avec ffmpeg, ou qui déplace des fichiers.",
+        ),
+        "verify-hash" => (
+            "A checksum is a fingerprint of a file. When the uploader adds .sfv or .md5 files, BDownloader compares them to detect damaged downloads.",
+            "Une somme de contrôle est l'empreinte d'un fichier. Quand l'auteur fournit des fichiers .sfv ou .md5, BDownloader les compare pour détecter les téléchargements abîmés.",
+        ),
+        "if-exists" => (
+            "When a file with the same name is already in the folder: keep both (the new one becomes \"name (1)\"), skip the download, or replace the old file.",
+            "Quand un fichier du même nom est déjà dans le dossier : garder les deux (le nouveau devient « nom (1) »), ignorer le téléchargement, ou remplacer l'ancien.",
+        ),
+        "portable" => (
+            "Everything (settings, queue, accounts list) is kept in a data folder next to BDownloader.exe, so you can carry it on a USB stick.",
+            "Tout (réglages, file, liste des comptes) est gardé dans un dossier data à côté de BDownloader.exe, pour l'emporter sur une clé USB.",
+        ),
+        _ => return None,
+    })
+}
 
 pub fn def(id: &str) -> Option<&'static Def> {
     DEFS.iter().find(|d| d.id == id)
@@ -619,6 +784,10 @@ impl Def {
             self.hint_en
         }
     }
+
+    pub fn info(&self) -> &'static str {
+        info(self.id).map(|(en, fr)| if i18n::is_french() { fr } else { en }).unwrap_or_default()
+    }
 }
 
 /// Current value as text (toggles are "true"/"false", selects the stored value).
@@ -635,6 +804,7 @@ pub fn get(s: &Settings, id: &str) -> String {
         "clicknload-port" => s.clicknload_port.to_string(),
         "language" => s.language.clone(),
         "after-extract" => if s.delete_archives { "delete" } else { "keep" }.to_owned(),
+        "portable" => Settings::portable_dir().is_some().to_string(),
         "theme" => match s.theme {
             ThemeMode::System => "system",
             ThemeMode::Light => "light",
@@ -678,6 +848,11 @@ pub fn set(s: &mut Settings, id: &str, value: &str) {
         "clicknload-port" => s.clicknload_port = n.clamp(1024, 65535) as u16,
         "language" => s.language = value.to_owned(),
         "after-extract" => s.delete_archives = value == "delete",
+        "portable" => {
+            if let Err(e) = s.set_portable(b) {
+                tracing::warn!(error = %e, "cannot change portable mode");
+            }
+        }
         "theme" => {
             s.theme = match value {
                 "light" => ThemeMode::Light,
@@ -691,7 +866,7 @@ pub fn set(s: &mut Settings, id: &str, value: &str) {
 
 /// Puts every option of a section back to its default.
 pub fn reset_category(s: &mut Settings, cat: usize) {
-    for def in DEFS.iter().filter(|d| d.cat == cat && d.status != Status::Planned) {
+    for def in DEFS.iter().filter(|d| d.cat == cat && !matches!(d.kind, Kind::Button(..)) && d.id != "portable") {
         if def.id == "download-dir" {
             s.download_dir = Settings::default().download_dir;
             continue;

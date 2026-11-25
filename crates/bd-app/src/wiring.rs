@@ -181,7 +181,17 @@ fn wire_downloads(ui: &AppWindow, app: &Shared) {
                         platform::open(path);
                     }
                 }
-                "open-folder" => platform::reveal(job.path.as_deref().unwrap_or(&job.dest_dir)),
+                "open-folder" => {
+                    // The finished file, else the partial file, else the folder.
+                    let part = job.dest_dir.join(format!("{}.part", job.name));
+                    let target = job
+                        .path
+                        .clone()
+                        .filter(|p| p.exists())
+                        .or_else(|| part.exists().then_some(part))
+                        .unwrap_or_else(|| job.dest_dir.clone());
+                    platform::reveal(&target);
+                }
                 "copy-link" => {
                     app.ignore_clipboard = Some(job.url.to_string());
                     if platform::copy_text(job.url.as_str()) {
@@ -323,7 +333,7 @@ fn wire_add_dialog(ui: &AppWindow, app: &Shared) {
                 return;
             }
             let count = app.add_links(links, "Paste", false);
-            app.toast(format!("+{count}"));
+            app.toast(format!("{} {count}", t("Links added:")));
             ui.set_add_dialog_open(false);
             ui.set_add_dialog_text(SharedString::new());
             ui.set_add_dialog_detected(0);
@@ -638,6 +648,40 @@ fn wire_extraction(ui: &AppWindow, app: &Shared) {
 
 /// Frameless window: drag, resize, minimize, maximize, close, speed box.
 fn wire_window(ui: &AppWindow, app: &Shared) {
+    let run = with(ui, app);
+    ui.on_open_help(move || run(&|app, _| app.toast(t("Documentation coming soon"))));
+    let run = with(ui, app);
+    ui.on_open_mini(move || run(&|app, ui| crate::mini::open(app, ui)));
+
+    let s = ui.global::<SettingsState>();
+    let run = with(ui, app);
+    s.on_rule_add(move || {
+        run(&|app, ui| {
+            crate::scheduler::add(&mut app.settings);
+            app.save_settings();
+            settings_view::refresh(app, ui);
+        })
+    });
+    let run = with(ui, app);
+    s.on_rule_remove(move |index| {
+        run(&|app, ui| {
+            crate::scheduler::remove(&mut app.settings, index.max(0) as usize);
+            app.save_settings();
+            settings_view::refresh(app, ui);
+        })
+    });
+    let run = with(ui, app);
+    s.on_rule_changed(move |index, field, value| {
+        run(&|app, ui| {
+            crate::scheduler::change(&mut app.settings, index.max(0) as usize, &field, &value);
+            app.save_settings();
+            // Text fields would lose focus on every key: only rebuild for choices.
+            if field != "from" && field != "to" && field != "value" {
+                settings_view::refresh(app, ui);
+            }
+        })
+    });
+
     let weak = ui.as_weak();
     ui.on_window_drag(move || {
         if let Some(ui) = weak.upgrade() {

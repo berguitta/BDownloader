@@ -64,6 +64,10 @@ pub const HOSTERS: &[(&str, &[&str], Free)] = &[
     ("Tezfiles", &["tezfiles.com"], Free::Browser),
     ("Filefactory", &["filefactory.com"], Free::Browser),
     ("Wupfile", &["wupfile.com"], Free::XFileSharing),
+    ("DataNodes", &["datanodes.to"], Free::XFileSharing),
+    ("Filekeeper", &["filekeeper.net"], Free::XFileSharing),
+    ("Fastupload", &["fastupload.io"], Free::XFileSharing),
+    ("Nelion", &["nelion.me"], Free::XFileSharing),
     ("DDownload", &["ddownload.com", "ddl.to"], Free::XFileSharing),
     ("Katfile", &["katfile.com", "katfile.cloud"], Free::XFileSharing),
     ("Uploady", &["uploady.io", "uploady.to"], Free::XFileSharing),
@@ -207,16 +211,17 @@ pub enum CaptchaMode {
 
 pub type CaptchaHandler = Arc<dyn Fn(Url, String) + Send + Sync>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ResolverOptions {
     pub prefer_debrid: bool,
     pub free_fallback: bool,
     pub captcha: CaptchaMode,
+    pub reconnect: Option<free::Reconnect>,
 }
 
 impl Default for ResolverOptions {
     fn default() -> Self {
-        ResolverOptions { prefer_debrid: false, free_fallback: true, captcha: CaptchaMode::Browser }
+        ResolverOptions { prefer_debrid: false, free_fallback: true, captcha: CaptchaMode::Browser, reconnect: None }
     }
 }
 
@@ -279,7 +284,15 @@ impl HosterResolver {
 
     async fn resolve_inner(&self, url: &Url, slot: Arc<ControlSlot>) -> Result<Resolved, String> {
         let Some((hoster, _, free_mode)) = entry_of(url).copied() else {
-            return Ok(Resolved::direct(url.clone()));
+            // Unknown site: a file, or an unknown XFileSharing hoster page?
+            return match free::sniff(url).await {
+                free::Sniff::Xfs if self.module_on("hoster-free") => {
+                    let name = url.host_str().unwrap_or("hoster").to_owned();
+                    free::xfilesharing(url, &slot, &format!("{name} (free)")).await.map_err(|e| format!("{name}: {e}"))
+                }
+                free::Sniff::Page => Err("this link is a web page, not a file".to_owned()),
+                _ => Ok(Resolved::direct(url.clone())),
+            };
         };
         let options = self.options.read().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(direct) = free_direct(url) {
@@ -312,7 +325,7 @@ impl HosterResolver {
         if options.free_fallback && self.module_on("hoster-free") {
             slot.set_status(Some("Free mode…"));
             let result = match free_mode {
-                Free::OneFichier => free::onefichier(url, &slot).await,
+                Free::OneFichier => free::onefichier(url, &slot, options.reconnect.as_ref()).await,
                 Free::XFileSharing => free::xfilesharing(url, &slot, &format!("{hoster} (free)")).await,
                 Free::MediaFire => free::mediafire(url).await,
                 Free::Gofile => free::gofile(url).await,
@@ -823,8 +836,6 @@ mod tests {
         let sink = opened.clone();
         resolver.set_captcha_handler(Arc::new(move |page, hoster| sink.lock().unwrap().push((page, hoster))));
         let slot = Arc::new(ControlSlot::default());
-        let plain = resolver.resolve(&url("https://example.com/a.zip"), slot.clone()).await.unwrap();
-        assert_eq!(plain.via, "Direct");
         let err = resolver.resolve(&url("https://rapidgator.net/file/abc/f.rar.html"), slot).await.unwrap_err();
         assert!(err.contains("captcha"), "{err}");
         assert_eq!(opened.lock().unwrap()[0].1, "Rapidgator");

@@ -235,8 +235,12 @@ impl VideoBackend {
             }
             tokio::fs::create_dir_all(&dest_dir).await.map_err(|e| RunError::Failed(e.to_string()))?;
             let mut cmd = command(&backend.yt_dlp);
-            cmd.args(["--no-playlist", "--newline", "--no-warnings", "--no-colors", "--continue"])
+            // --print implies --quiet and may imply --simulate: force both back.
+            cmd.env("PYTHONIOENCODING", "utf-8")
+                .args(["--encoding", "utf-8", "--no-simulate", "--progress"])
+                .args(["--no-playlist", "--newline", "--no-warnings", "--no-colors", "--continue"])
                 .args(["--progress-template", "download:BDPROG %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s %(info.title)s"])
+                .args(["--print", "before_dl:BDID %(id)s"])
                 .args(["--print", "after_move:BDPATH %(filepath)s"])
                 .args(["-o", &dest_dir.join("%(title)s [%(id)s].%(ext)s").to_string_lossy()])
                 .args(format.args(backend.ffmpeg.is_some()));
@@ -277,24 +281,39 @@ impl VideoBackend {
                 last_error
             });
 
-            let mut lines = BufReader::new(stdout).lines();
+            // Read raw bytes: a title in another encoding must not stop the
+            // reading (that lost the final path before).
+            let mut reader = BufReader::new(stdout);
+            let mut buf = Vec::new();
             let mut final_path = None;
+            let mut video_id = None;
             loop {
+                buf.clear();
                 tokio::select! {
                     _ = control.cancel.cancelled() => {
                         let _ = child.kill().await;
                         return Err(RunError::Cancelled);
                     }
-                    line = lines.next_line() => match line {
-                        Ok(Some(line)) => {
+                    read = reader.read_until(b'\n', &mut buf) => match read {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            let line = String::from_utf8_lossy(&buf);
+                            let line = line.trim_end_matches(['\r', '\n']);
                             if let Some(rest) = line.strip_prefix("BDPROG ") {
                                 control.update(rest);
                             } else if let Some(path) = line.strip_prefix("BDPATH ") {
                                 final_path = Some(PathBuf::from(path.trim()));
+                            } else if let Some(id) = line.strip_prefix("BDID ") {
+                                video_id = Some(id.trim().to_owned());
                             }
                         }
-                        _ => break,
                     }
+                }
+            }
+            // Fallback: the newest file whose name carries the video id.
+            if final_path.as_ref().is_none_or(|p| !p.exists()) {
+                if let Some(id) = &video_id {
+                    final_path = newest_file_with(&dest_dir, &format!("[{id}]")).or(final_path);
                 }
             }
             let status = child.wait().await.map_err(|e| RunError::Failed(e.to_string()))?;
@@ -309,6 +328,22 @@ impl VideoBackend {
             }
         })
     }
+}
+
+fn newest_file_with(dir: &Path, marker: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            // Skip partial and per-format intermediate files ("x [id].f137.mp4").
+            let intermediate = name
+                .split('.')
+                .any(|p| p.len() > 1 && p.starts_with('f') && p[1..].chars().all(|c| c.is_ascii_digit()));
+            name.contains(marker) && !name.ends_with(".part") && !name.ends_with(".ytdl") && !intermediate
+        })
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+        .map(|e| e.path())
 }
 
 /// Progress of a yt-dlp run. Each stream (video, then audio) is a segment.

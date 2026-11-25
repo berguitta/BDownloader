@@ -153,6 +153,23 @@ impl Grabber {
         let Some(link) = self.lock().links.iter().find(|l| l.id == id).cloned() else { return };
         let url = link.url.clone();
 
+        if crate::torrent::is_torrent_url(&url) {
+            let name = crate::torrent::magnet_name(&url);
+            self.apply(id, Update::Online { name, size: None });
+            return;
+        }
+
+        if crate::decrypt::is_container(&url) {
+            match crate::decrypt::expand(&url).await {
+                Ok(expanded) if !expanded.links.is_empty() => {
+                    self.replace_with_pool(id, expanded.links, &expanded.name)
+                }
+                Ok(_) => self.apply(id, Update::Offline("empty folder".into())),
+                Err(e) => self.apply(id, Update::Offline(e)),
+            }
+            return;
+        }
+
         if is_video_url(&url) {
             let backend = self.video.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let update = match backend {
@@ -189,7 +206,17 @@ impl Grabber {
                     self.apply(id, Update::Online { name: remote.file_name, size: remote.size });
                 }
             }
-            Err(e) => self.apply(id, Update::Offline(short_error(&e))),
+            Err(e) => {
+                // Some unknown hosters refuse plain clients: look at the page
+                // like a browser before calling the link offline.
+                let update = match crate::free::page_info(&url).await {
+                    Ok(info) if !info.offline && (info.name.is_some() || info.size.is_some()) => {
+                        Update::Online { name: info.name, size: info.size }
+                    }
+                    _ => Update::Offline(short_error(&e)),
+                };
+                self.apply(id, update);
+            }
         }
     }
 
@@ -199,11 +226,27 @@ impl Grabber {
             Ok(html) => html,
             Err(e) => return self.apply(id, Update::Offline(e)),
         };
+        if crate::free::is_xfs_page(&html) {
+            // File page of an unknown hoster built on XFileSharing.
+            let update = if crate::free::looks_offline(&html) {
+                Update::Offline("file removed".into())
+            } else {
+                Update::Online { name: crate::free::name_on_page(&html), size: crate::free::size_on_page(&html) }
+            };
+            return self.apply(id, update);
+        }
         let (title, links) = links_in_page(page, &html);
         if links.is_empty() {
             return self.apply(id, Update::Offline("web page without file links".into()));
         }
         let package = title.clone().unwrap_or_else(|| page.host_str().unwrap_or("Page").to_owned());
+        self.replace_with_pool(id, links, &package);
+    }
+
+    /// Replaces a link (page, folder) by the links it stands for, grouped in
+    /// one package.
+    fn replace_with_pool(&self, id: GrabId, links: Vec<Url>, package: &str) {
+        let package = package.to_owned();
         {
             let mut inner = self.lock();
             inner.links.retain(|l| l.id != id);
@@ -364,6 +407,7 @@ impl Grabber {
             };
             let kind = match &link.video {
                 Some(info) => JobKind::Video { format: info.choices[link.video_choice].format.clone() },
+                None if crate::torrent::is_torrent_url(&link.url) => JobKind::Torrent,
                 None => JobKind::Http,
             };
             specs.push(JobSpec {

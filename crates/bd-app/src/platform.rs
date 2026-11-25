@@ -3,14 +3,31 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Opens Explorer with the file selected, or the folder itself.
+/// Opens Explorer with the file selected, or the folder itself. When the
+/// folder does not exist yet, the closest existing parent opens.
 pub fn reveal(path: &Path) {
-    let result = if path.is_file() {
-        Command::new("explorer.exe").arg(format!("/select,{}", path.display())).spawn()
+    let mut cmd = Command::new("explorer.exe");
+    if path.is_file() {
+        // Explorer needs `/select,"path"` as one raw argument: the default
+        // quoting of the whole argument makes it ignore the path.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.raw_arg(format!("/select,\"{}\"", path.display()));
+        }
+        #[cfg(not(windows))]
+        cmd.arg(path);
     } else {
-        Command::new("explorer.exe").arg(path).spawn()
-    };
-    if let Err(e) = result {
+        let mut dir = path.to_path_buf();
+        while !dir.is_dir() {
+            match dir.parent() {
+                Some(parent) => dir = parent.to_path_buf(),
+                None => break,
+            }
+        }
+        cmd.arg(&dir);
+    }
+    if let Err(e) = cmd.spawn() {
         tracing::warn!(error = %e, path = %path.display(), "cannot open Explorer");
     }
 }
@@ -118,3 +135,30 @@ pub fn run_hidden(program: &Path, args: &[&str]) {
         tracing::debug!(error = %e, program = %program.display(), "cannot run helper");
     }
 }
+
+/// Hibernates the computer (used when the queue is finished).
+pub fn hibernate_computer() {
+    let _ = Command::new("shutdown").args(["/h"]).spawn();
+}
+
+/// Anti-standby: keeps the computer (and optionally the screen) awake while
+/// downloads or extractions run. Call with `false` to let it sleep again.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub fn keep_awake(on: bool, screen: bool) {
+    use windows_sys::Win32::System::Power::{
+        SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED,
+    };
+    let flags = if on {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | if screen { ES_DISPLAY_REQUIRED } else { 0 }
+    } else {
+        ES_CONTINUOUS
+    };
+    // SAFETY: plain flags, no pointers; always valid to call.
+    unsafe {
+        SetThreadExecutionState(flags);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn keep_awake(_on: bool, _screen: bool) {}

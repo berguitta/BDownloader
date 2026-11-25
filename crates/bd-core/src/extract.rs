@@ -12,6 +12,8 @@ pub struct ExtractOptions {
     pub passwords: Vec<String>,
     /// Delete the archive files once everything extracted fine.
     pub delete_archives: bool,
+    /// Also extract archives found inside the extracted files (one level).
+    pub nested: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +56,7 @@ pub fn extract_package(
     candidates.extend(options.passwords.iter().filter(|p| !p.is_empty()).cloned().map(Some));
 
     let mut report = ExtractReport::default();
+    let before: Vec<PathBuf> = list_files(dir);
     for archive in files.iter().filter(|f| f.file_name().and_then(|n| n.to_str()).is_some_and(is_first_volume)) {
         let mut outcome = Err("no password worked".to_owned());
         for password in &candidates {
@@ -70,6 +73,17 @@ pub fn extract_package(
             }
         }
         report.results.push(ArchiveResult { archive: archive.clone(), outcome });
+    }
+
+    if options.nested && report.all_ok() {
+        let inner: Vec<PathBuf> =
+            list_files(dir).into_iter().filter(|f| !before.contains(f) && !files.contains(f)).collect();
+        if inner.iter().any(|f| f.file_name().and_then(|n| n.to_str()).is_some_and(is_first_volume)) {
+            let nested =
+                extract_package(&inner, dir, package_password, &ExtractOptions { nested: false, ..options.clone() });
+            report.results.extend(nested.results);
+            report.deleted += nested.deleted;
+        }
     }
 
     if options.delete_archives && !report.results.is_empty() && report.all_ok() {
@@ -183,6 +197,10 @@ fn rar_failure(e: unrar::error::UnrarError) -> Failure {
     }
 }
 
+fn list_files(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect()).unwrap_or_default()
+}
+
 fn count_files(dir: &Path) -> usize {
     std::fs::read_dir(dir).map(|d| d.count()).unwrap_or(0)
 }
@@ -213,7 +231,7 @@ mod tests {
             zip.write_all(b"world").unwrap();
             zip.finish().unwrap();
         }
-        let options = ExtractOptions { passwords: vec![], delete_archives: true };
+        let options = ExtractOptions { passwords: vec![], delete_archives: true, nested: false };
         let report = extract_package(std::slice::from_ref(&archive), &dir, None, &options);
         assert_eq!(report.results[0].outcome, Ok(2));
         assert_eq!(std::fs::read_to_string(dir.join("sub").join("world.txt")).unwrap(), "world");

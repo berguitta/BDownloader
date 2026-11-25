@@ -78,15 +78,20 @@ pub fn refresh(app: &App, ui: &AppWindow) {
                 Kind::Select { .. } => (2, 0, 0, ""),
                 Kind::Text(_) => (3, 0, 0, ""),
                 Kind::Path => (4, 0, 0, ""),
+                Kind::Button(..) => (6, 0, 0, ""),
             };
             items.push(SettingItem {
                 id: def.id.into(),
                 label: def.label().into(),
                 hint: def.hint().into(),
+                info: def.info().into(),
                 kind,
                 flag: value == "true",
                 number: value.parse::<i64>().unwrap_or(0).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-                text: value.as_str().into(),
+                text: match def.kind {
+                    Kind::Button(en, fr) => if i18n::is_french() { fr } else { en }.into(),
+                    _ => value.as_str().into(),
+                },
                 option_index: values.iter().position(|v| *v == value).unwrap_or(0) as i32,
                 options: ModelRc::new(VecModel::from(options)),
                 unit: unit.into(),
@@ -95,7 +100,6 @@ pub fn refresh(app: &App, ui: &AppWindow) {
                 status: match def.status {
                     Status::Ready => 0,
                     Status::Restart => 1,
-                    Status::Planned => 2,
                 },
                 advanced: def.advanced,
                 group: group.into(),
@@ -105,6 +109,7 @@ pub fn refresh(app: &App, ui: &AppWindow) {
         }
     }
     s.set_items(ModelRc::new(VecModel::from(items)));
+    s.set_rules(ModelRc::new(VecModel::from(crate::scheduler::rule_rows(&app.settings))));
     s.set_hidden_advanced(if query.is_empty() { hidden } else { 0 });
 }
 
@@ -117,6 +122,10 @@ pub fn changed(app: &mut App, ui: &AppWindow, id: &str, value: &str) {
         return;
     }
     let Some(def) = schema::def(id) else { return };
+    if let Kind::Button(..) = def.kind {
+        crate::actions::button(app, ui, id);
+        return;
+    }
     let stored = match def.kind {
         Kind::Select { options, .. } => {
             let index = value.parse::<usize>().unwrap_or(0).min(options.len() - 1);
@@ -141,6 +150,7 @@ pub fn changed(app: &mut App, ui: &AppWindow, id: &str, value: &str) {
         "clicknload-port" => app.restart_clicknload(),
         "launch-with-windows" => platform::set_launch_with_windows(stored == "true"),
         "density" => ui.set_compact(stored == "compact"),
+        "portable" => app.toast(crate::i18n::t("Applies at the next start")),
         _ => {}
     }
     app.apply_config();

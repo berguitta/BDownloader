@@ -53,6 +53,11 @@ pub enum UiMsg {
         host: String,
         image: Option<(Vec<u8>, u32, u32)>,
     },
+    Toast(String),
+    Checksums {
+        package: String,
+        results: Vec<bd_core::checksum::CheckResult>,
+    },
 }
 
 /// One archive on the Extraction screen.
@@ -103,6 +108,12 @@ pub struct App {
     /// Job and action waiting for the input dialog (rename, file limit).
     pub input_action: Option<(JobId, String)>,
     pub was_busy: bool,
+    pub schedule: crate::scheduler::State,
+    pub torrent: Option<Arc<bd_core::torrent::TorrentBackend>>,
+    pub last_slow_tick: Instant,
+    pub last_account_check: Instant,
+    pub awake: bool,
+    pub mini: Option<crate::MiniWindow>,
 }
 
 impl App {
@@ -145,10 +156,14 @@ impl App {
     }
 
     /// Pushes settings and module states to the engine, queue and resolver.
-    pub fn apply_config(&self) {
+    pub fn apply_config(&mut self) {
         let config = Self::manager_config(&self.settings, &self.modules);
         self.manager.update_config(|c| *c = config);
-        let limit = if self.modules.is_enabled("speed-limit") { self.settings.speed_limit_kib * 1024 } else { 0 };
+        let mut limit = if self.modules.is_enabled("speed-limit") { self.settings.speed_limit_kib * 1024 } else { 0 };
+        // A scheduler rule overrides the global limit while it applies.
+        if let Some(kib) = self.schedule.limit_kib {
+            limit = if limit == 0 { kib * 1024 } else { limit.min(kib * 1024) };
+        }
         self.manager.set_speed_limit(limit);
         let enabled: Vec<String> =
             self.modules.list().into_iter().filter(|(_, on)| *on).map(|(m, _)| m.id.to_owned()).collect();
@@ -162,11 +177,27 @@ impl App {
                 "skip" => CaptchaMode::Skip,
                 _ => CaptchaMode::Browser,
             },
+            reconnect: crate::actions::reconnect_hook(self),
         });
         self.grabber.set_page_scan(self.modules.is_enabled("page-scan"));
         let backend = self.video_backend();
         self.manager.set_video_backend(backend.clone());
         self.grabber.set_video_backend(backend);
+        // Torrent session: created once, its port and upload limit apply at
+        // the next start.
+        if self.modules.is_enabled("torrent") {
+            if self.torrent.is_none() {
+                let options = bd_core::torrent::TorrentOptions {
+                    port: self.settings.number("torrent-port", 51413).clamp(1024, 65535) as u16,
+                    upload_kib: self.settings.number("torrent-upload", 2048).clamp(0, u32::MAX as i64) as u32,
+                    ratio: self.settings.number("torrent-ratio", 1).max(0) as f64,
+                };
+                self.torrent = Some(bd_core::torrent::TorrentBackend::new(options, self.settings.download_dir.clone()));
+            }
+            self.manager.set_torrent_backend(self.torrent.clone());
+        } else {
+            self.manager.set_torrent_backend(None);
+        }
     }
 
     pub fn video_backend(&self) -> Option<VideoBackend> {
@@ -291,6 +322,7 @@ impl App {
                 Vec::new()
             },
             delete_archives: self.settings.delete_archives,
+            nested: self.settings.flag("nested", true),
         };
         let target = if self.settings.text("extract-into", "package") == "subfolder" {
             let first =
@@ -337,18 +369,68 @@ impl App {
         self.extract_revision = 0;
     }
 
+    /// Every ten seconds: scheduler, free disk space, accounts, anti-standby.
+    fn slow_tick(&mut self) {
+        crate::scheduler::tick(self);
+
+        let min_gb = self.settings.number("min-free", 5).max(0) as u64;
+        let downloading = self.jobs.iter().any(|j| j.state == JobState::Downloading);
+        if min_gb > 0 && downloading {
+            if let Ok(free) = fs4::available_space(&self.settings.download_dir).or_else(|_| {
+                fs4::available_space(
+                    self.settings.download_dir.ancestors().find(|p| p.exists()).unwrap_or(std::path::Path::new(".")),
+                )
+            }) {
+                if free < min_gb * 1_000_000_000 {
+                    self.manager.pause_all();
+                    let text = format!("Disk almost full: {} left, downloads paused", format::bytes(free));
+                    self.toast(text.clone());
+                    self.notify(true, "BDownloader", &text);
+                }
+            }
+        }
+
+        let hours = self.settings.number("account-check", 6).clamp(1, 72) as u64;
+        if self.last_account_check.elapsed() >= Duration::from_secs(hours * 3600) {
+            self.last_account_check = Instant::now();
+            for (account, secret) in self.accounts.credentials() {
+                let (resolver, sender) = (self.resolver.clone(), self.sender.clone());
+                self.runtime.spawn(async move {
+                    let result = resolver.check_account(&account.service, &account.username, &secret).await;
+                    let _ = sender.send(UiMsg::AccountChecked {
+                        service: account.service,
+                        username: account.username,
+                        result,
+                        save_secret: None,
+                    });
+                });
+            }
+        }
+
+        let busy = downloading || self.extract_jobs.iter().any(|j| j.outcome.is_none());
+        let want_awake = busy && self.modules.is_enabled("anti-standby");
+        if want_awake != self.awake {
+            self.awake = want_awake;
+            platform::keep_awake(want_awake, self.settings.flag("keep-screen-on", false));
+        }
+    }
+
     /// "When the queue is finished" action, once the last download ends.
     fn check_queue_done(&mut self, _ui: &AppWindow) {
         let busy = self.jobs.iter().any(|j| matches!(j.state, JobState::Downloading | JobState::Queued));
         let finished_something = self.jobs.iter().any(|j| j.state == JobState::Finished);
         if self.was_busy && !busy && finished_something {
-            match self.settings.text("when-done", "nothing") {
+            crate::actions::send_event(self, "queue-done", "", "", "", false);
+            let action =
+                if self.modules.is_enabled("power") { self.settings.text("when-done", "nothing") } else { "nothing" };
+            match action {
                 "close" => {
                     self.quitting = true;
                     let _ = slint::quit_event_loop();
                 }
                 "sleep" => platform::sleep_computer(),
                 "shutdown" => platform::shutdown_computer(),
+                "hibernate" => platform::hibernate_computer(),
                 _ => {}
             }
         }
@@ -369,6 +451,13 @@ impl App {
         self.refresh_extraction(ui, false);
         self.refresh_tool_status(ui);
         self.check_queue_done(ui);
+        if let Some(mini) = &self.mini {
+            crate::mini::refresh(self, mini);
+        }
+        if self.last_slow_tick.elapsed() >= Duration::from_secs(10) {
+            self.last_slow_tick = Instant::now();
+            self.slow_tick();
+        }
 
         if self.manager.revision() != self.saved_revision && self.last_save.elapsed() > Duration::from_secs(2) {
             self.save_queue();
@@ -376,6 +465,7 @@ impl App {
         match &self.toast {
             Some((text, at)) if at.elapsed() < TOAST_DURATION => {
                 ui.set_toast_text(text.as_str().into());
+                ui.set_toast_error(is_error_text(text));
                 ui.set_toast_visible(true);
             }
             _ => ui.set_toast_visible(false),
@@ -725,14 +815,24 @@ impl App {
         for event in drained {
             match event {
                 ManagerEvent::JobFailed { name, error, .. } => {
+                    crate::actions::send_event(self, "failed", &name, &error, "", false);
                     self.notify(true, &t("Download failed"), &format!("{name}\n{error}"));
                 }
-                ManagerEvent::JobFinished { name, .. } => {
+                ManagerEvent::JobFinished { name, path, .. } => {
+                    crate::actions::send_event(self, "finished", &name, &path.display().to_string(), "", false);
                     if self.settings.text("notifications", "finished-errors") == "all" {
                         self.notify(false, &t("Download finished"), &name);
                     }
                 }
                 ManagerEvent::PackageFinished { package, dir, files, password } => {
+                    crate::actions::send_event(self, "package", &package, &dir.display().to_string(), &package, false);
+                    if self.modules.is_enabled("checksum") && self.settings.flag("verify-hash", true) {
+                        let (sender, files, package) = (self.sender.clone(), files.clone(), package.clone());
+                        self.runtime.spawn_blocking(move || {
+                            let results = bd_core::checksum::verify(&files);
+                            let _ = sender.send(UiMsg::Checksums { package, results });
+                        });
+                    }
                     let has_archives = files.iter().any(|f| {
                         f.file_name().and_then(|n| n.to_str()).is_some_and(bd_core::packages::is_first_volume)
                     });
@@ -846,6 +946,23 @@ impl App {
                     };
                     self.toast(format!("{title}: {package}"));
                     self.notify(!errors.is_empty(), &title, &body);
+                    crate::actions::send_event(self, "extracted", &package, "", &package, false);
+                }
+                UiMsg::Toast(text) => self.toast(text),
+                UiMsg::Checksums { package, results } => {
+                    let bad: Vec<String> = results
+                        .iter()
+                        .filter(|r| r.ok == Some(false))
+                        .map(|r| r.file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+                        .collect();
+                    let good = results.iter().filter(|r| r.ok == Some(true)).count();
+                    if !bad.is_empty() {
+                        let text = format!("Checksum error: {}", bad.join(", "));
+                        self.toast(text.clone());
+                        self.notify(true, &package, &text);
+                    } else if good > 0 {
+                        self.toast(format!("Checksums OK · {package} · {good}"));
+                    }
                 }
             }
         }
@@ -900,7 +1017,7 @@ impl App {
         let links = bd_core::links::extract_links(&text);
         let added = self.add_links(links, "Clipboard", false);
         if added > 0 {
-            self.toast(format!("+{added}"));
+            self.toast(format!("{} {added}", t("Links added:")));
         }
     }
 }
@@ -957,6 +1074,7 @@ impl App {
                 "AUDIO"
             }
             JobKind::Video { .. } => "VIDEO",
+            JobKind::Torrent => "TORRENT",
             JobKind::Http => match bd_core::hosters::hoster_of(&job.url) {
                 Some(_) => "DDL",
                 None => "HTTP",
@@ -1023,6 +1141,12 @@ fn short_error(error: &str) -> String {
     } else {
         error.to_owned()
     }
+}
+
+/// Toasts about problems get the error style.
+fn is_error_text(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    ["error", "failed", "cannot", "échec", "erreur", "impossible", "captcha"].iter().any(|w| lower.contains(w))
 }
 
 /// Sparkline paths in a 150x34 viewbox.

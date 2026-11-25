@@ -7,9 +7,9 @@ import { DownloadsPage, DownloadsState, JobRow, KeyValue, Connection, Columns } 
 import { GrabberPage, GrabberState, GrabRow } from "grabber.slint";
 import { AccountsPage, AccountsState, AccountRow } from "accounts.slint";
 import { ExtractionPage, ExtractionState, ExtractRow } from "extraction.slint";
-import { SettingsPage, SettingsState, SettingItem } from "settings.slint";
+import { SettingsPage, SettingsState, SettingItem, RuleRow } from "settings.slint";
 
-export { DownloadsState, JobRow, KeyValue, Connection, Columns, SettingsState, SettingItem, GrabberState, GrabRow, AccountsState, AccountRow, ExtractionState, ExtractRow }
+export { DownloadsState, JobRow, KeyValue, Connection, Columns, SettingsState, SettingItem, RuleRow, GrabberState, GrabRow, AccountsState, AccountRow, ExtractionState, ExtractRow }
 
 component AddLinksDialog inherits Rectangle {
     in-out property <string> text;
@@ -129,6 +129,62 @@ component ResizeEdge inherits TouchArea {
     }
 }
 
+// Mini mode: a small always-on-top window for a corner of the desktop.
+export component MiniWindow inherits Window {
+    title: "BDownloader";
+    icon: @image-url("../../../assets/logo-64.png");
+    no-frame: true;
+    always-on-top: true;
+    width: 330px;
+    height: 104px;
+    background: Theme.win;
+    default-font-family: "Segoe UI";
+    in property <string> speed: "0 B/s";
+    in property <string> summary;
+    in property <string> current;
+    in property <float> progress;
+    in property <bool> paused;
+    callback restore();
+    callback pause-all();
+    callback resume-all();
+    callback open-help();
+    callback open-mini();
+    callback close-mini();
+    callback drag();
+
+    Rectangle {
+        border-width: 1px;
+        border-color: Theme.ln;
+        TouchArea {
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && e.button == PointerEventButton.left { root.drag(); }
+            }
+            double-clicked => { root.restore(); }
+        }
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout { alignment: center; Image { width: 20px; height: 20px; source: @image-url("../../../assets/logo-64.png"); } }
+                Text { text: root.speed; font-size: 18px; font-weight: 700; color: Theme.ink; vertical-alignment: center; }
+                Text { text: root.summary; font-size: 12px; color: Theme.mut; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                IconBtn { size: 26px; icon: root.paused ? Icons.play : Icons.pause; tooltip: root.paused ? @tr("Resume all") : @tr("Pause all"); clicked => { if root.paused { root.resume-all(); } else { root.pause-all(); } } }
+                IconBtn { size: 26px; icon: Icons.expand; tooltip: @tr("Open BDownloader"); clicked => { root.restore(); } }
+                IconBtn { size: 26px; icon: Icons.win-close; tooltip: @tr("Close"); clicked => { root.close-mini(); } }
+            }
+            Text { text: root.current; font-size: 12.5px; color: Theme.ink; overflow: elide; }
+            Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.trk;
+                clip: true;
+                Rectangle { x: 0; width: parent.width * root.progress; background: Theme.acc; }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: root.window-title;
     icon: @image-url("../../../assets/logo-64.png");
@@ -159,6 +215,7 @@ export component AppWindow inherits Window {
     in-out property <int> speed-unit: 1;
     in property <string> toast-text;
     in property <bool> toast-visible;
+    in property <bool> toast-error;
 
     in-out property <bool> add-dialog-open;
     in-out property <string> add-dialog-text;
@@ -181,6 +238,8 @@ export component AppWindow inherits Window {
     callback clear-speed-limit();
     callback pause-all();
     callback resume-all();
+    callback open-help();
+    callback open-mini();
 
     // Theme handling: remember the system scheme before overriding it.
     property <bool> system-dark;
@@ -228,6 +287,8 @@ export component AppWindow inherits Window {
                 }
                 Text { text: @tr("v0.1 preview"); font-size: 12px; color: Theme.mut; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; }
+                VerticalLayout { alignment: center; IconBtn { size: 30px; icon: Icons.mini; tooltip: @tr("Mini mode"); clicked => { root.open-mini(); } } }
+                VerticalLayout { alignment: center; IconBtn { size: 30px; icon: Icons.help; tooltip: @tr("Help and documentation"); clicked => { root.open-help(); } } }
                 VerticalLayout {
                     alignment: center;
                     IconBtn {
@@ -377,16 +438,38 @@ export component AppWindow inherits Window {
         cancel => { root.input-open = false; }
     }
 
-    if root.toast-visible: Rectangle {
+    // Toast: small card at the top center, fades and slides in.
+    toast := Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height - 48px - self.height;
-        height: 36px;
-        border-radius: 8px;
-        background: Theme.ink;
-        HorizontalLayout {
-            padding-left: 14px;
-            padding-right: 14px;
-            Text { text: root.toast-text; color: Theme.win; font-size: 13.5px; vertical-alignment: center; }
+        y: root.toast-visible ? 52px : 36px;
+        opacity: root.toast-visible ? 1 : 0;
+        animate y, opacity { duration: 220ms; easing: ease-out; }
+        width: min(toast-layout.preferred-width, parent.width - 40px);
+        height: 44px;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.ln;
+        background: Theme.win;
+        drop-shadow-blur: 22px;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-color: #00000033;
+        clip: true;
+        Rectangle { x: 0; width: 4px; background: root.toast-error ? Theme.er : Theme.acc; }
+        toast-layout := HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 18px;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: 12px;
+                    background: (root.toast-error ? Theme.er : Theme.acc).with-alpha(0.14);
+                    Icon { width: 14px; height: 14px; commands: root.toast-error ? Icons.win-close : Icons.check; stroke: root.toast-error ? Theme.er : Theme.acc; stroke-width: 2.4px; }
+                }
+            }
+            Text { text: root.toast-text; color: Theme.ink; font-size: 13.5px; font-weight: 500; vertical-alignment: center; overflow: elide; }
         }
     }
 

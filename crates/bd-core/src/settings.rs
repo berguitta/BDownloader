@@ -111,7 +111,34 @@ impl Settings {
         if let Some(path) = std::env::var_os("BD_SETTINGS").filter(|p| !p.is_empty()) {
             return Some(PathBuf::from(path));
         }
+        if let Some(dir) = Self::portable_dir() {
+            return Some(dir.join("settings.toml"));
+        }
         ProjectDirs::from("", "", "BDownloader").map(|d| d.config_dir().join("settings.toml"))
+    }
+
+    /// Portable mode: a `portable.flag` file next to the executable keeps all
+    /// data in a `data` folder beside it.
+    pub fn portable_dir() -> Option<PathBuf> {
+        let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+        exe_dir.join("portable.flag").is_file().then(|| exe_dir.join("data"))
+    }
+
+    /// Turns portable mode on or off (takes effect at the next start). The
+    /// current settings are copied to the new place.
+    pub fn set_portable(&self, on: bool) -> std::io::Result<()> {
+        let exe_dir = std::env::current_exe()?.parent().map(Path::to_path_buf).unwrap_or_default();
+        let flag = exe_dir.join("portable.flag");
+        if on {
+            std::fs::write(&flag, "BDownloader keeps its data in the data folder next to this file.\n")?;
+            self.save_to(&exe_dir.join("data").join("settings.toml"))
+        } else {
+            let _ = std::fs::remove_file(&flag);
+            match ProjectDirs::from("", "", "BDownloader") {
+                Some(d) => self.save_to(&d.config_dir().join("settings.toml")),
+                None => Ok(()),
+            }
+        }
     }
 
     /// Loads settings, falling back to defaults when the file is missing or

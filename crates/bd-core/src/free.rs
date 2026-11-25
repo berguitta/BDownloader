@@ -35,6 +35,17 @@ impl std::fmt::Display for FreeError {
 
 type FreeResult<T> = Result<T, FreeError>;
 
+/// Asks the internet box for a new IP; true when it worked.
+pub type ReconnectFn = Arc<dyn Fn() -> futures_util::future::BoxFuture<'static, bool> + Send + Sync>;
+
+/// Reconnect instead of waiting when a hoster asks to wait at least this
+/// many minutes.
+#[derive(Clone)]
+pub struct Reconnect {
+    pub run: ReconnectFn,
+    pub after_minutes: u64,
+}
+
 fn other(e: impl std::fmt::Display) -> FreeError {
     FreeError::Other(e.to_string())
 }
@@ -311,7 +322,7 @@ fn file_link(page: &Url, html: &str, host_hint: &str) -> Option<Url> {
 // ------------------------------------------------------------------ hosters
 
 /// 1fichier free mode: the page may ask to wait; then a form gives the link.
-pub async fn onefichier(url: &Url, slot: &Arc<ControlSlot>) -> FreeResult<Resolved> {
+pub async fn onefichier(url: &Url, slot: &Arc<ControlSlot>, reconnect: Option<&Reconnect>) -> FreeResult<Resolved> {
     let client = session_client();
     let (page, html) = get_text(&client, url).await?;
     if looks_offline(&html) {
@@ -322,8 +333,17 @@ pub async fn onefichier(url: &Url, slot: &Arc<ControlSlot>) -> FreeResult<Resolv
         let minutes: String =
             lower[pos..].chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
         let minutes = minutes.parse::<u64>().unwrap_or(1).max(1);
-        wait_seconds(slot, minutes * 60 + 5, "Free mode, 1fichier asks to wait").await?;
-        return Box::pin(onefichier(url, slot)).await;
+        let reconnected = match reconnect {
+            Some(r) if minutes >= r.after_minutes => {
+                slot.set_status(Some("Getting a new IP…"));
+                (r.run)().await
+            }
+            _ => false,
+        };
+        if !reconnected {
+            wait_seconds(slot, minutes * 60 + 5, "Free mode, 1fichier asks to wait").await?;
+        }
+        return Box::pin(onefichier(url, slot, None)).await;
     }
     let mut form =
         forms(&html).into_iter().find(|f| f.field("adz").is_some()).ok_or_else(|| other("1fichier page changed"))?;
@@ -599,4 +619,40 @@ mod tests {
         assert_eq!(file_link(&page, html, "uploady.io").unwrap().as_str(), "https://s3.uploady.io/d/xyz/My.Movie.mkv");
         assert!(file_link(&page, r#"<a href="/premium.html">Download faster</a>"#, "uploady.io").is_none());
     }
+}
+
+/// What an unknown link points to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sniff {
+    File,
+    /// A file page of a site built on XFileSharing.
+    Xfs,
+    /// Some other web page.
+    Page,
+    /// Could not tell (network error): try it as a file.
+    Unknown,
+}
+
+/// Looks at an unknown link like a browser would.
+pub async fn sniff(url: &Url) -> Sniff {
+    let client = session_client();
+    let Ok(response) = client.get(url.clone()).send().await else { return Sniff::Unknown };
+    let is_html = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .is_some_and(|v| v.to_str().unwrap_or_default().starts_with("text/html"));
+    if !is_html {
+        return Sniff::File;
+    }
+    let Ok(html) = response.text().await else { return Sniff::Unknown };
+    if is_xfs_page(&html) {
+        Sniff::Xfs
+    } else {
+        Sniff::Page
+    }
+}
+
+/// A file page with the XFileSharing download form.
+pub fn is_xfs_page(html: &str) -> bool {
+    forms(html).iter().any(|f| matches!(f.field("op"), Some("download1" | "download2" | "download3")))
 }

@@ -27,6 +27,8 @@ pub enum JobKind {
     Http,
     /// Video site through yt-dlp.
     Video { format: VideoFormat },
+    /// Magnet or .torrent link.
+    Torrent,
 }
 
 /// Everything needed to (re)start a job.
@@ -228,6 +230,7 @@ struct Inner {
     next_id: JobId,
     config: ManagerConfig,
     video: Option<VideoBackend>,
+    torrent: Option<Arc<crate::torrent::TorrentBackend>>,
     resolver: Arc<dyn LinkResolver>,
     /// Packages already reported as finished.
     reported: HashSet<String>,
@@ -253,6 +256,7 @@ impl DownloadManager {
                 next_id: 1,
                 config,
                 video: None,
+                torrent: None,
                 resolver: Arc::new(NoResolver),
                 reported: HashSet::new(),
                 events: tx,
@@ -288,6 +292,10 @@ impl DownloadManager {
 
     pub fn set_video_backend(&self, backend: Option<VideoBackend>) {
         self.lock().video = backend;
+    }
+
+    pub fn set_torrent_backend(&self, backend: Option<Arc<crate::torrent::TorrentBackend>>) {
+        self.lock().torrent = backend;
     }
 
     pub fn set_resolver(&self, resolver: Arc<dyn LinkResolver>) {
@@ -674,6 +682,7 @@ impl DownloadManager {
         let mut free = inner.config.max_parallel.saturating_sub(running);
         let config = inner.config.clone();
         let video = inner.video.clone();
+        let torrent = inner.torrent.clone();
         let resolver = inner.resolver.clone();
         // Forced jobs first, then by priority, then in list order.
         let mut order: Vec<usize> =
@@ -702,6 +711,12 @@ impl DownloadManager {
                     None => Box::pin(async {
                         Err(RunError::Failed("turn on the video module and install yt-dlp in Settings".to_owned()))
                     }),
+                },
+                JobKind::Torrent => match &torrent {
+                    Some(backend) => backend.run(job.spec.url.clone(), job.spec.dest_dir.clone(), slot.clone()),
+                    None => {
+                        Box::pin(async { Err(RunError::Failed("turn on the torrent module in Settings".to_owned())) })
+                    }
                 },
             };
             job.generation += 1;

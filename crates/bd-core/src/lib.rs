@@ -10,7 +10,9 @@
 //! - [`clicknload`]: the local Click'n'Load listener.
 
 pub mod accounts;
+pub mod checksum;
 pub mod clicknload;
+pub mod decrypt;
 pub mod extract;
 pub mod free;
 pub mod grabber;
@@ -19,9 +21,11 @@ pub mod links;
 pub mod manager;
 pub mod modules;
 pub mod packages;
+pub mod reconnect;
 pub mod settings;
 pub mod task;
 pub mod tools;
+pub mod torrent;
 pub mod video;
 
 pub use manager::{DownloadManager, JobId, JobKind, JobSnapshot, JobSpec, JobState};

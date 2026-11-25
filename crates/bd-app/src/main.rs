@@ -2,12 +2,15 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod actions;
 mod app;
 mod favicon;
 mod format;
 mod frame;
 mod i18n;
+mod mini;
 mod platform;
+mod scheduler;
 mod schema;
 mod settings_view;
 #[cfg(feature = "snapshot")]
@@ -121,6 +124,12 @@ fn main() -> Result<()> {
         extract_revision: 1,
         input_action: None,
         was_busy: false,
+        schedule: Default::default(),
+        torrent: None,
+        last_slow_tick: Instant::now(),
+        last_account_check: Instant::now(),
+        awake: false,
+        mini: None,
     }));
     {
         let mut a = app.borrow_mut();

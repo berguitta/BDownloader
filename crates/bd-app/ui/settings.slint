@@ -9,6 +9,8 @@ export struct SettingItem {
     id: string,
     label: string,
     hint: string,
+    // Longer explanation behind the "i" button.
+    info: string,
     // 0 toggle, 1 number, 2 select, 3 text, 4 folder, 5 module
     kind: int,
     flag: bool,
@@ -27,7 +29,22 @@ export struct SettingItem {
     first-in-group: bool,
 }
 
+export struct RuleRow {
+    enabled: bool,
+    // index in the days list
+    days: int,
+    from: string,
+    to: string,
+    // index in the actions list
+    action: int,
+    value: int,
+}
+
 export global SettingsState {
+    in property <[RuleRow]> rules;
+    callback rule-changed(int, string, string);
+    callback rule-add();
+    callback rule-remove(int);
     in property <[string]> categories;
     in-out property <int> category;
     in-out property <string> search;
@@ -80,6 +97,7 @@ component CategoryItem inherits Rectangle {
 
 component ItemRow inherits Rectangle {
     in property <SettingItem> item;
+    property <bool> show-info;
     min-height: 58px;
     HLine { y: parent.height - 1px; }
     HorizontalLayout {
@@ -92,12 +110,32 @@ component ItemRow inherits Rectangle {
             spacing: 2px;
             HorizontalLayout {
                 spacing: 6px;
-                Text { text: item.label; font-weight: 500; color: item.status == 2 ? Theme.mut : Theme.ink; wrap: word-wrap; horizontal-stretch: 1; }
+                Text { text: item.label; font-weight: 500; color: item.status == 2 ? Theme.mut : Theme.ink; wrap: word-wrap; }
+                if item.info != "": VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: info-ta.has-hover || root.show-info ? Theme.accs : transparent;
+                        info-ta := TouchArea { mouse-cursor: pointer; clicked => { root.show-info = !root.show-info; } }
+                        Icon { width: 15px; height: 15px; commands: Icons.info; stroke: root.show-info ? Theme.acc : Theme.mut; }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
                 if item.advanced: VerticalLayout { alignment: center; Pill { text: @tr("advanced"); tone: Theme.mut; } }
                 if item.status == 1: VerticalLayout { alignment: center; Pill { text: @tr("after restart"); tone: Theme.acc; } }
                 if item.status == 2: VerticalLayout { alignment: center; Pill { text: @tr("Planned"); } }
             }
             if item.hint != "": Text { text: item.hint; font-size: 12.5px; color: Theme.mut; wrap: word-wrap; }
+            if root.show-info: Rectangle {
+                border-radius: 8px;
+                background: Theme.accs;
+                HorizontalLayout {
+                    padding: 8px;
+                    Text { text: item.info; font-size: 12.5px; color: Theme.ink; wrap: word-wrap; }
+                }
+            }
         }
         HorizontalLayout {
             alignment: end;
@@ -145,6 +183,10 @@ component ItemRow inherits Rectangle {
                     enabled: item.status != 2;
                     edited(t) => { SettingsState.item-changed(item.id, t); }
                 }
+            }
+            if item.kind == 6: VerticalLayout {
+                alignment: center;
+                Btn { small: true; text: item.text; clicked => { SettingsState.item-changed(item.id, "click"); } }
             }
             if item.kind == 4: HorizontalLayout {
                 spacing: 6px;
@@ -275,6 +317,73 @@ export component SettingsPage inherits HorizontalLayout {
                         status: SettingsState.ffmpeg-status;
                         installed: SettingsState.ffmpeg-installed;
                     }
+                }
+                if SettingsState.search == "" && SettingsState.category == 9: VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: @tr("Rules run every day they match. Speed limits and pauses apply between the two times; starting, stopping, reconnecting and turning off happen at the first time.");
+                        color: Theme.mut;
+                        font-size: 12.5px;
+                        wrap: word-wrap;
+                    }
+                    for rule[i] in SettingsState.rules: Rectangle {
+                        height: 52px;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.ln;
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 6px;
+                            spacing: 8px;
+                            VerticalLayout { alignment: center; Switch { checked: rule.enabled; toggled => { SettingsState.rule-changed(i, "enabled", self.checked ? "true" : "false"); } } }
+                            VerticalLayout {
+                                alignment: center;
+                                ComboBox {
+                                    width: 150px;
+                                    model: [@tr("Every day"), @tr("Weekdays"), @tr("Weekends"), @tr("Monday"), @tr("Tuesday"), @tr("Wednesday"), @tr("Thursday"), @tr("Friday"), @tr("Saturday"), @tr("Sunday")];
+                                    current-index: rule.days;
+                                    selected => { SettingsState.rule-changed(i, "days", self.current-index); }
+                                }
+                            }
+                            VerticalLayout { alignment: center; LineEdit { width: 70px; text: rule.from; placeholder-text: "09:00"; edited(t) => { SettingsState.rule-changed(i, "from", t); } } }
+                            if rule.action <= 1: HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: "→"; vertical-alignment: center; color: Theme.mut; }
+                                VerticalLayout { alignment: center; LineEdit { width: 70px; text: rule.to; placeholder-text: "18:00"; edited(t) => { SettingsState.rule-changed(i, "to", t); } } }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                ComboBox {
+                                    width: 200px;
+                                    model: [@tr("Limit the speed to"), @tr("Pause everything"), @tr("Start all downloads"), @tr("Pause all downloads"), @tr("Get a new IP"), @tr("Turn off the computer")];
+                                    current-index: rule.action;
+                                    selected => { SettingsState.rule-changed(i, "action", self.current-index); }
+                                }
+                            }
+                            if rule.action == 0: HorizontalLayout {
+                                spacing: 4px;
+                                VerticalLayout { alignment: center; SpinBox { width: 120px; minimum: 1; maximum: 10000000; value: rule.value; edited(v) => { SettingsState.rule-changed(i, "value", v); } } }
+                                Text { text: "KB/s"; vertical-alignment: center; color: Theme.mut; font-size: 12.5px; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 30px;
+                                    height: 30px;
+                                    border-radius: 6px;
+                                    background: rm-ta.has-hover ? Theme.trk : transparent;
+                                    rm-ta := TouchArea { mouse-cursor: pointer; clicked => { SettingsState.rule-remove(i); } }
+                                    Icon { width: 16px; height: 16px; commands: Icons.trash; }
+                                }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Btn { small: true; icon: Icons.plus; text: @tr("Add a rule"); clicked => { SettingsState.rule-add(); } }
+                    }
+                    Rectangle { height: 8px; }
                 }
                 for item in SettingsState.items: VerticalLayout {
                     if item.first-in-group && SettingsState.search != "": Text {
