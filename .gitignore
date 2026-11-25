@@ -1,2 +1,11 @@
-# Plan de travail local (non publié)
+# Local planning notes (not published)
 docs/PLAN.md
+
+# Rust build output
+target/
+
+# Tauri generated schemas
+prototypes/tauri-list/gen/
+
+# Local UI prototypes (not published)
+prototypes/
