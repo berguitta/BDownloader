@@ -9,6 +9,10 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("fr", "Français")]
 
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
+pub fn is_french() -> bool {
+    LANGUAGES[CURRENT.load(Ordering::Relaxed)].0 == "fr"
+}
+
 pub fn index_of(code: &str) -> usize {
     LANGUAGES.iter().position(|(c, _)| *c == code).unwrap_or(0)
 }
@@ -34,7 +38,7 @@ fn french(text: &str) -> Option<&'static str> {
         "Finished" => "Terminé",
         "Checking…" => "Vérification…",
         "Online" => "En ligne",
-        "Needs an account to check" => "Vérifiable avec un compte",
+        "Checked when downloading" => "Vérifié au téléchargement",
         "File not found (404)" => "Fichier introuvable (404)",
         "Access denied (403)" => "Accès refusé (403)",
         "Too many requests" => "Trop de requêtes",
@@ -62,6 +66,11 @@ fn french(text: &str) -> Option<&'static str> {
         "Unlimited" => "Illimitée",
         "Quit" => "Quitter",
         "Videos" => "Vidéos",
+        "Rename" => "Renommer",
+        "Speed limit for this file" => "Limite de débit pour ce fichier",
+        "In MB/s, any value. 0 removes the limit." => "En Mo/s, n'importe quelle valeur. 0 retire la limite.",
+        "Applies at the next start" => "S'applique au prochain lancement",
+        "Free mode…" => "Mode gratuit…",
         _ => return None,
     })
 }

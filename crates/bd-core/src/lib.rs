@@ -12,6 +12,7 @@
 pub mod accounts;
 pub mod clicknload;
 pub mod extract;
+pub mod free;
 pub mod grabber;
 pub mod hosters;
 pub mod links;

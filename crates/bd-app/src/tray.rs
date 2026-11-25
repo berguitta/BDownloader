@@ -1,12 +1,9 @@
 //! Tray icon with its quick menu.
 
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::i18n::t;
-
-/// Speed limit presets in KiB/s shown in the menu.
-pub const SPEED_PRESETS: &[u64] = &[0, 1024, 5 * 1024, 10 * 1024, 25 * 1024];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
@@ -15,7 +12,8 @@ pub enum TrayAction {
     ToggleClipboard(bool),
     PauseAll,
     ResumeAll,
-    SpeedLimit(u64),
+    /// Open the speed limit box of the window.
+    SpeedLimit,
     Quit,
 }
 
@@ -26,7 +24,7 @@ pub struct Tray {
     watch_clipboard: CheckMenuItem,
     pause_all: MenuItem,
     resume_all: MenuItem,
-    speeds: Vec<(CheckMenuItem, u64)>,
+    speed: MenuItem,
     quit: MenuItem,
 }
 
@@ -39,29 +37,14 @@ fn icon_image() -> Option<tray_icon::Icon> {
     tray_icon::Icon::from_rgba(buf, info.width, info.height).ok()
 }
 
-fn speed_label(kib: u64) -> String {
-    if kib == 0 {
-        t("Unlimited")
-    } else {
-        format!("{} MB/s", kib / 1024)
-    }
-}
-
 impl Tray {
-    pub fn new(watch_clipboard: bool, speed_kib: u64) -> Result<Self, String> {
+    pub fn new(watch_clipboard: bool) -> Result<Self, String> {
         let open = MenuItem::new(t("Open BDownloader"), true, None);
         let add_clipboard = MenuItem::new(t("Add links from clipboard"), true, None);
         let watch = CheckMenuItem::new(t("Watch clipboard"), true, watch_clipboard, None);
         let pause_all = MenuItem::new(t("Pause all"), true, None);
         let resume_all = MenuItem::new(t("Resume all"), true, None);
-        let speeds: Vec<(CheckMenuItem, u64)> = SPEED_PRESETS
-            .iter()
-            .map(|&kib| (CheckMenuItem::new(speed_label(kib), true, kib == speed_kib, None), kib))
-            .collect();
-        let speed_menu = Submenu::new(t("Speed limit"), true);
-        for (item, _) in &speeds {
-            speed_menu.append(item).map_err(|e| e.to_string())?;
-        }
+        let speed = MenuItem::new(format!("{}…", t("Speed limit")), true, None);
         let quit = MenuItem::new(t("Quit"), true, None);
 
         let menu = Menu::new();
@@ -73,7 +56,7 @@ impl Tray {
             &PredefinedMenuItem::separator(),
             &pause_all,
             &resume_all,
-            &speed_menu,
+            &speed,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -85,7 +68,7 @@ impl Tray {
             builder = builder.with_icon(image);
         }
         let icon = builder.build().map_err(|e| e.to_string())?;
-        Ok(Tray { icon, open, add_clipboard, watch_clipboard: watch, pause_all, resume_all, speeds, quit })
+        Ok(Tray { icon, open, add_clipboard, watch_clipboard: watch, pause_all, resume_all, speed, quit })
     }
 
     pub fn set_tooltip(&self, text: &str) {
@@ -94,12 +77,6 @@ impl Tray {
 
     pub fn set_watch_clipboard(&self, on: bool) {
         self.watch_clipboard.set_checked(on);
-    }
-
-    pub fn set_speed(&self, kib: u64) {
-        for (item, value) in &self.speeds {
-            item.set_checked(*value == kib);
-        }
     }
 
     /// Pending clicks on the icon and its menu.
@@ -126,8 +103,8 @@ impl Tray {
                 actions.push(TrayAction::ResumeAll);
             } else if id == self.quit.id() {
                 actions.push(TrayAction::Quit);
-            } else if let Some((_, kib)) = self.speeds.iter().find(|(item, _)| item.id() == id) {
-                actions.push(TrayAction::SpeedLimit(*kib));
+            } else if id == self.speed.id() {
+                actions.push(TrayAction::SpeedLimit);
             }
         }
         actions

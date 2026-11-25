@@ -7,7 +7,7 @@ const ARCHIVE_EXTENSIONS: &[&str] = &["rar", "zip", "7z", "tar", "gz", "tgz", "b
 
 const FILE_EXTENSIONS: &[&str] = &[
     "rar", "zip", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso", "img", "dmg", "exe", "msi", "apk", "pdf", "epub",
-    "mp4", "mkv", "avi", "mov", "webm", "mp3", "flac", "wav", "ogg", "m4a", "jpg", "png", "bin", "dat", "deb", "rpm",
+    "mp4", "mkv", "avi", "mov", "webm", "mp3", "flac", "wav", "ogg", "m4a", "bin", "dat", "deb", "rpm",
 ];
 
 /// Lower-cased extension chain, e.g. `["part01", "rar"]` for `x.part01.rar`.

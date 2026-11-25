@@ -1,20 +1,40 @@
-//! Hoster support: recognise hoster links and turn them into direct links
-//! through a debrid service or the hoster's official premium API.
+//! Hoster support: recognise hoster links, check them, and turn them into
+//! direct links through a debrid service, the hoster's official premium API,
+//! or the free mode of the site (wait timers, captchas handed to the user).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use url::Url;
 
-use crate::accounts::{service, Account};
-use crate::task::{LinkResolver, Resolved};
+use crate::accounts::{service, Account, ServiceKind, SERVICES};
+use crate::free::{self, FreeError, PageInfo};
+use crate::task::{ControlSlot, LinkResolver, Resolved};
 
 const AGENT: &str = "BDownloader";
 
-/// Known file hosters: (canonical name, domains).
-pub const HOSTERS: &[(&str, &[&str])] = &[
+/// How the free mode of a hoster works.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Free {
+    /// Implemented flow without captcha in the usual case.
+    OneFichier,
+    XFileSharing,
+    MediaFire,
+    Gofile,
+    GoogleDrive,
+    Krakenfiles,
+    Pixeldrain,
+    Dropbox,
+    /// The site always asks for a captcha or uses encryption: the page is
+    /// opened in the browser (or a debrid/premium account is used).
+    Browser,
+}
+
+/// Known file hosters: (name, domains, free mode).
+pub const HOSTERS: &[(&str, &[&str], Free)] = &[
     (
         "1fichier",
         &[
@@ -30,38 +50,94 @@ pub const HOSTERS: &[(&str, &[&str])] = &[
             "tenvoi.com",
             "dl4free.com",
         ],
+        Free::OneFichier,
     ),
-    ("Rapidgator", &["rapidgator.net", "rg.to"]),
-    ("Turbobit", &["turbobit.net", "turbobit.cc"]),
-    ("Nitroflare", &["nitroflare.com", "nitro.download"]),
-    ("Uploaded", &["uploaded.net", "ul.to"]),
-    ("DDownload", &["ddownload.com", "ddl.to"]),
-    ("Katfile", &["katfile.com"]),
-    ("Uptobox", &["uptobox.com", "uptobox.eu"]),
-    ("Mega", &["mega.nz", "mega.co.nz"]),
-    ("MediaFire", &["mediafire.com"]),
-    ("FileFactory", &["filefactory.com"]),
-    ("Hitfile", &["hitfile.net"]),
-    ("Gofile", &["gofile.io"]),
-    ("Pixeldrain", &["pixeldrain.com"]),
-    ("Dropbox", &["dropbox.com"]),
-    ("Google Drive", &["drive.google.com"]),
+    ("Rapidgator", &["rapidgator.net", "rapidgator.asia", "rg.to"], Free::Browser),
+    ("Turbobit", &["turbobit.net", "turbobit.cc", "turbo.to", "turb.to", "turbobit.pw", "trbbt.net"], Free::Browser),
+    ("Nitroflare", &["nitroflare.com", "nitro.download"], Free::Browser),
+    ("Uploaded", &["uploaded.net", "uploaded.to", "ul.to"], Free::Browser),
+    ("Hitfile", &["hitfile.net", "hil.to"], Free::Browser),
+    ("Mega", &["mega.nz", "mega.co.nz", "mega.io"], Free::Browser),
+    ("Uptobox", &["uptobox.com", "uptobox.eu", "uptostream.com"], Free::Browser),
+    ("Fileboom", &["fileboom.me", "fboom.me"], Free::Browser),
+    ("Keep2Share", &["k2s.cc", "keep2share.cc", "keep2s.cc"], Free::Browser),
+    ("Tezfiles", &["tezfiles.com"], Free::Browser),
+    ("Filefactory", &["filefactory.com"], Free::Browser),
+    ("Wupfile", &["wupfile.com"], Free::XFileSharing),
+    ("DDownload", &["ddownload.com", "ddl.to"], Free::XFileSharing),
+    ("Katfile", &["katfile.com", "katfile.cloud"], Free::XFileSharing),
+    ("Uploady", &["uploady.io", "uploady.to"], Free::XFileSharing),
+    ("Dailyuploads", &["dailyuploads.net", "dailyupload.io", "dailyuploads.io"], Free::XFileSharing),
+    ("Hexupload", &["hexupload.net", "hexload.com"], Free::XFileSharing),
+    ("Uploadrar", &["uploadrar.com", "uploadrar.net"], Free::XFileSharing),
+    ("Usersdrive", &["usersdrive.com"], Free::XFileSharing),
+    ("Mexashare", &["mexa.sh", "mexashare.com"], Free::XFileSharing),
+    ("Drop.download", &["drop.download"], Free::XFileSharing),
+    (
+        "Clicknupload",
+        &["clicknupload.click", "clicknupload.to", "clicknupload.org", "clickndownload.click"],
+        Free::XFileSharing,
+    ),
+    ("Filerio", &["filerio.in"], Free::XFileSharing),
+    ("Send.cm", &["send.cm", "send.now"], Free::XFileSharing),
+    ("File-upload", &["file-upload.org", "file-upload.com"], Free::XFileSharing),
+    ("Upload-4ever", &["upload-4ever.com"], Free::XFileSharing),
+    ("Worldbytez", &["worldbytez.com"], Free::XFileSharing),
+    ("Frdl", &["frdl.io", "frdl.to"], Free::XFileSharing),
+    ("Uploadev", &["uploadev.org"], Free::XFileSharing),
+    ("Filespace", &["filespace.com"], Free::XFileSharing),
+    ("Rapidcloud", &["rapidcloud.cc"], Free::XFileSharing),
+    ("Up-load", &["up-load.io"], Free::XFileSharing),
+    ("Userload", &["userload.co"], Free::XFileSharing),
+    ("Vidoza", &["vidoza.net"], Free::XFileSharing),
+    ("Filefox", &["filefox.cc"], Free::XFileSharing),
+    ("Isra.cloud", &["isra.cloud"], Free::XFileSharing),
+    ("Fikper", &["fikper.com"], Free::Browser),
+    ("Mediafire", &["mediafire.com"], Free::MediaFire),
+    ("Gofile", &["gofile.io"], Free::Gofile),
+    ("Google Drive", &["drive.google.com", "drive.usercontent.google.com"], Free::GoogleDrive),
+    ("Krakenfiles", &["krakenfiles.com"], Free::Krakenfiles),
+    ("Pixeldrain", &["pixeldrain.com", "pixeldra.in"], Free::Pixeldrain),
+    ("Dropbox", &["dropbox.com"], Free::Dropbox),
+    ("OneDrive", &["onedrive.live.com", "1drv.ms"], Free::Browser),
+    ("Box", &["box.com", "app.box.com"], Free::Browser),
+    ("pCloud", &["pcloud.com", "u.pcloud.link"], Free::Browser),
+    ("Icedrive", &["icedrive.net"], Free::Browser),
+    ("Terabox", &["terabox.com", "1024terabox.com", "teraboxapp.com"], Free::Browser),
+    ("Sendspace", &["sendspace.com"], Free::Browser),
+    ("Zippyshare", &["zippyshare.com"], Free::Browser),
+    ("Depositfiles", &["depositfiles.com", "dfiles.eu"], Free::Browser),
+    ("Easybytez", &["easybytez.com"], Free::Browser),
+    ("Mixdrop", &["mixdrop.co", "mixdrop.ag"], Free::Browser),
+    ("Streamtape", &["streamtape.com"], Free::Browser),
+    ("Doodstream", &["dood.la", "doodstream.com", "dood.wf"], Free::Browser),
+    ("Filestore", &["filestore.to"], Free::Browser),
+    ("Uploadgig", &["uploadgig.com"], Free::Browser),
+    ("Alfafile", &["alfafile.net"], Free::Browser),
+    ("Ex-load", &["ex-load.com"], Free::Browser),
+    ("Prefiles", &["prefiles.com"], Free::Browser),
+    ("Darkibox", &["darkibox.com"], Free::Browser),
 ];
+
+fn entry_of(url: &Url) -> Option<&'static (&'static str, &'static [&'static str], Free)> {
+    let host = url.host_str()?.to_ascii_lowercase();
+    HOSTERS.iter().find(|(_, domains, _)| domains.iter().any(|d| host == *d || host.ends_with(&format!(".{d}"))))
+}
 
 /// Hoster name for a link, if it is a known file hoster.
 pub fn hoster_of(url: &Url) -> Option<&'static str> {
-    let host = url.host_str()?.to_ascii_lowercase();
-    HOSTERS
-        .iter()
-        .find(|(_, domains)| domains.iter().any(|d| host == *d || host.ends_with(&format!(".{d}"))))
-        .map(|(name, _)| *name)
+    entry_of(url).map(|(name, _, _)| *name)
 }
 
-/// Hosters whose free links can be turned into direct links without account.
+pub fn free_mode_of(url: &Url) -> Option<Free> {
+    entry_of(url).map(|(_, _, free)| *free)
+}
+
+/// Hosters whose links become direct without any page or account.
 fn free_direct(url: &Url) -> Option<Url> {
-    match hoster_of(url)? {
+    match free_mode_of(url)? {
         // https://pixeldrain.com/u/ID → https://pixeldrain.com/api/file/ID
-        "Pixeldrain" => {
+        Free::Pixeldrain => {
             let mut segments = url.path_segments()?;
             match (segments.next(), segments.next()) {
                 (Some("u"), Some(id)) if !id.is_empty() => {
@@ -72,7 +148,7 @@ fn free_direct(url: &Url) -> Option<Url> {
             }
         }
         // Dropbox shares become direct downloads with dl=1.
-        "Dropbox" => {
+        Free::Dropbox => {
             let mut direct = url.clone();
             let pairs: Vec<(String, String)> =
                 url.query_pairs().filter(|(k, _)| k != "dl").map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
@@ -83,6 +159,36 @@ fn free_direct(url: &Url) -> Option<Url> {
     }
 }
 
+/// Result of checking a hoster link for the link grabber.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkCheck {
+    Online {
+        name: Option<String>,
+        size: Option<u64>,
+    },
+    Offline(String),
+    /// Could not tell (the page gives nothing reliable).
+    Unknown,
+}
+
+/// Checks a hoster link without downloading it: free APIs when the hoster
+/// has one, otherwise the file page.
+pub async fn check_link(url: &Url) -> LinkCheck {
+    let result = match free_mode_of(url) {
+        Some(Free::OneFichier) => free::onefichier_check(url).await,
+        Some(Free::Pixeldrain | Free::Dropbox | Free::GoogleDrive | Free::Gofile) => return LinkCheck::Unknown,
+        Some(_) => free::page_info(url).await,
+        None => return LinkCheck::Unknown,
+    };
+    match result {
+        Ok(PageInfo { offline: true, .. }) => LinkCheck::Offline("file removed".to_owned()),
+        Ok(PageInfo { name: None, size: None, .. }) => LinkCheck::Unknown,
+        Ok(PageInfo { name, size, .. }) => LinkCheck::Online { name, size },
+        Err(FreeError::Offline(why)) => LinkCheck::Offline(why),
+        Err(_) => LinkCheck::Unknown,
+    }
+}
+
 /// Account details shown in the Accounts screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountCheck {
@@ -90,12 +196,38 @@ pub struct AccountCheck {
     pub summary: String,
 }
 
-/// Resolves links with the user's accounts and enabled modules.
+/// What to do when a free download needs a captcha.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CaptchaMode {
+    #[default]
+    Browser,
+    Notify,
+    Skip,
+}
+
+pub type CaptchaHandler = Arc<dyn Fn(Url, String) + Send + Sync>;
+
+#[derive(Clone, Debug)]
+pub struct ResolverOptions {
+    pub prefer_debrid: bool,
+    pub free_fallback: bool,
+    pub captcha: CaptchaMode,
+}
+
+impl Default for ResolverOptions {
+    fn default() -> Self {
+        ResolverOptions { prefer_debrid: false, free_fallback: true, captcha: CaptchaMode::Browser }
+    }
+}
+
+/// Resolves links with the user's accounts, enabled modules and options.
 pub struct HosterResolver {
     client: reqwest::Client,
     credentials: RwLock<Vec<(Account, String)>>,
     modules: RwLock<HashSet<String>>,
-    rapidgator_tokens: Mutex<HashMap<String, String>>,
+    options: RwLock<ResolverOptions>,
+    on_captcha: RwLock<Option<CaptchaHandler>>,
+    tokens: Mutex<HashMap<String, String>>,
 }
 
 impl HosterResolver {
@@ -104,7 +236,9 @@ impl HosterResolver {
             client,
             credentials: RwLock::default(),
             modules: RwLock::default(),
-            rapidgator_tokens: Mutex::default(),
+            options: RwLock::default(),
+            on_captcha: RwLock::default(),
+            tokens: Mutex::default(),
         })
     }
 
@@ -117,9 +251,22 @@ impl HosterResolver {
         *self.modules.write().unwrap_or_else(|e| e.into_inner()) = modules.into_iter().collect();
     }
 
+    pub fn set_options(&self, options: ResolverOptions) {
+        *self.options.write().unwrap_or_else(|e| e.into_inner()) = options;
+    }
+
+    /// Called with the page URL and the hoster name when a captcha is needed.
+    pub fn set_captcha_handler(&self, handler: CaptchaHandler) {
+        *self.on_captcha.write().unwrap_or_else(|e| e.into_inner()) = Some(handler);
+    }
+
+    fn module_on(&self, module: &str) -> bool {
+        self.modules.read().unwrap_or_else(|e| e.into_inner()).contains(module)
+    }
+
     fn account_for(&self, service_id: &str) -> Option<(Account, String)> {
         let module = service(service_id)?.module;
-        if !self.modules.read().unwrap_or_else(|e| e.into_inner()).contains(module) {
+        if !self.module_on(module) {
             return None;
         }
         self.credentials
@@ -130,48 +277,134 @@ impl HosterResolver {
             .cloned()
     }
 
-    async fn resolve_inner(&self, url: &Url) -> Result<Resolved, String> {
-        let Some(hoster) = hoster_of(url) else { return Ok(Resolved::direct(url.clone())) };
-
+    async fn resolve_inner(&self, url: &Url, slot: Arc<ControlSlot>) -> Result<Resolved, String> {
+        let Some((hoster, _, free_mode)) = entry_of(url).copied() else {
+            return Ok(Resolved::direct(url.clone()));
+        };
+        let options = self.options.read().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(direct) = free_direct(url) {
-            return Ok(Resolved { via: format!("{hoster} (free)"), ..Resolved::direct(direct) });
-        }
-        if hoster == "1fichier" {
-            if let Some((_, key)) = self.account_for("1fichier") {
-                return self.onefichier(url, &key).await;
+            if self.module_on("hoster-free-direct") {
+                return Ok(Resolved { via: format!("{hoster} (free)"), ..Resolved::direct(direct) });
             }
         }
-        if hoster == "Rapidgator" {
-            if let Some((account, password)) = self.account_for("rapidgator") {
-                return self.rapidgator(url, &account.username, &password).await;
+
+        let mut errors: Vec<String> = Vec::new();
+        if options.prefer_debrid {
+            match self.try_debrid(url, &slot).await {
+                Ok(Some(resolved)) => return Ok(resolved),
+                Ok(None) => {}
+                Err(e) => errors.push(e),
             }
         }
-        let mut last_error = None;
-        for debrid in ["real-debrid", "alldebrid", "premiumize"] {
-            let Some((_, key)) = self.account_for(debrid) else { continue };
-            let result = match debrid {
-                "real-debrid" => self.real_debrid(url, &key).await,
-                "alldebrid" => self.alldebrid(url, &key).await,
-                _ => self.premiumize(url, &key).await,
+        match self.try_premium(hoster, url).await {
+            Ok(Some(resolved)) => return Ok(resolved),
+            Ok(None) => {}
+            Err(e) => errors.push(e),
+        }
+        if !options.prefer_debrid {
+            match self.try_debrid(url, &slot).await {
+                Ok(Some(resolved)) => return Ok(resolved),
+                Ok(None) => {}
+                Err(e) => errors.push(e),
+            }
+        }
+
+        if options.free_fallback && self.module_on("hoster-free") {
+            slot.set_status(Some("Free mode…"));
+            let result = match free_mode {
+                Free::OneFichier => free::onefichier(url, &slot).await,
+                Free::XFileSharing => free::xfilesharing(url, &slot, &format!("{hoster} (free)")).await,
+                Free::MediaFire => free::mediafire(url).await,
+                Free::Gofile => free::gofile(url).await,
+                Free::GoogleDrive => free::google_drive(url).await,
+                Free::Krakenfiles => free::krakenfiles(url).await,
+                Free::Pixeldrain | Free::Dropbox => {
+                    Err(FreeError::Other("turn on the Pixeldrain and Dropbox module".into()))
+                }
+                Free::Browser => Err(FreeError::Captcha(url.clone())),
             };
+            slot.set_status(None);
             match result {
                 Ok(resolved) => return Ok(resolved),
+                Err(FreeError::Captcha(page)) => {
+                    let message = match options.captcha {
+                        CaptchaMode::Browser => {
+                            format!("{hoster} free mode needs a captcha: the page was opened in your browser")
+                        }
+                        CaptchaMode::Notify => {
+                            format!("{hoster} free mode needs a captcha: open the link in your browser")
+                        }
+                        CaptchaMode::Skip => format!("{hoster} free mode needs a captcha: skipped"),
+                    };
+                    if options.captcha != CaptchaMode::Skip {
+                        if let Some(handler) = self.on_captcha.read().unwrap_or_else(|e| e.into_inner()).clone() {
+                            handler(page, hoster.to_owned());
+                        }
+                    }
+                    errors.push(message);
+                }
+                Err(e) => errors.push(format!("{hoster}: {e}")),
+            }
+        }
+
+        Err(errors.pop().unwrap_or_else(|| format!("{hoster}: add a premium or debrid account, or turn on free mode")))
+    }
+
+    async fn try_premium(&self, hoster: &str, url: &Url) -> Result<Option<Resolved>, String> {
+        match hoster {
+            "1fichier" => match self.account_for("1fichier") {
+                Some((_, key)) => self.onefichier(url, &key).await.map(Some),
+                None => Ok(None),
+            },
+            "Rapidgator" => match self.account_for("rapidgator") {
+                Some((account, password)) => self.rapidgator(url, &account.username, &password).await.map(Some),
+                None => Ok(None),
+            },
+            _ => Ok(None),
+        }
+    }
+
+    async fn try_debrid(&self, url: &Url, slot: &Arc<ControlSlot>) -> Result<Option<Resolved>, String> {
+        let mut last = None;
+        for svc in SERVICES.iter().filter(|s| s.kind == ServiceKind::Debrid) {
+            let Some((account, secret)) = self.account_for(svc.id) else { continue };
+            slot.set_status(Some(&format!("{}…", svc.name)));
+            let result = match svc.id {
+                "real-debrid" => self.real_debrid(url, &secret).await,
+                "alldebrid" => self.alldebrid(url, &secret).await,
+                "premiumize" => self.premiumize(url, &secret).await,
+                "debrid-link" => self.debrid_link(url, &secret).await,
+                "torbox" => self.torbox(url, &secret, slot).await,
+                "offcloud" => self.offcloud(url, &secret).await,
+                "linksnappy" => self.linksnappy(url, &account.username, &secret).await,
+                "mega-debrid" => self.mega_debrid(url, &account.username, &secret).await,
+                _ => continue,
+            };
+            slot.set_status(None);
+            match result {
+                Ok(resolved) => return Ok(Some(resolved)),
                 Err(e) => {
-                    tracing::info!(service = debrid, error = %e, "debrid could not unlock the link, trying the next one");
-                    last_error = Some(e);
+                    tracing::info!(service = svc.id, error = %e, "debrid could not unlock the link");
+                    last = Some(format!("{}: {e}", svc.name));
                 }
             }
         }
-        Err(last_error.unwrap_or_else(|| {
-            format!("{hoster} needs a premium or debrid account in this version: add one in Accounts")
-        }))
+        last.map_or(Ok(None), Err)
     }
 
     async fn json(&self, request: reqwest::RequestBuilder) -> Result<Value, String> {
         let response = request.send().await.map_err(|e| e.to_string())?;
         let status = response.status();
-        let body: Value = response.json().await.map_err(|e| format!("invalid answer ({status}): {e}"))?;
-        Ok(body)
+        response.json().await.map_err(|e| format!("invalid answer ({status}): {e}"))
+    }
+
+    fn resolved(link: &str, name: Option<&str>, via: &str) -> Result<Resolved, String> {
+        Ok(Resolved {
+            url: Url::parse(link).map_err(|e| e.to_string())?,
+            headers: Vec::new(),
+            file_name: name.map(str::to_owned),
+            via: via.to_owned(),
+        })
     }
 
     async fn real_debrid(&self, url: &Url, token: &str) -> Result<Resolved, String> {
@@ -184,12 +417,7 @@ impl HosterResolver {
             )
             .await?;
         let link = body["download"].as_str().ok_or_else(|| api_error(&body, "error"))?;
-        Ok(Resolved {
-            url: Url::parse(link).map_err(|e| e.to_string())?,
-            headers: Vec::new(),
-            file_name: body["filename"].as_str().map(str::to_owned),
-            via: "Real-Debrid".to_owned(),
-        })
+        Self::resolved(link, body["filename"].as_str(), "Real-Debrid")
     }
 
     async fn alldebrid(&self, url: &Url, key: &str) -> Result<Resolved, String> {
@@ -205,12 +433,7 @@ impl HosterResolver {
         }
         let link =
             body["data"]["link"].as_str().filter(|l| !l.is_empty()).ok_or("AllDebrid is still preparing this link")?;
-        Ok(Resolved {
-            url: Url::parse(link).map_err(|e| e.to_string())?,
-            headers: Vec::new(),
-            file_name: body["data"]["filename"].as_str().map(str::to_owned),
-            via: "AllDebrid".to_owned(),
-        })
+        Self::resolved(link, body["data"]["filename"].as_str(), "AllDebrid")
     }
 
     async fn premiumize(&self, url: &Url, key: &str) -> Result<Resolved, String> {
@@ -227,12 +450,141 @@ impl HosterResolver {
         }
         let first = &body["content"][0];
         let link = first["link"].as_str().ok_or("Premiumize returned no file")?;
-        Ok(Resolved {
-            url: Url::parse(link).map_err(|e| e.to_string())?,
-            headers: Vec::new(),
-            file_name: first["path"].as_str().and_then(|p| p.rsplit('/').next()).map(str::to_owned),
-            via: "Premiumize".to_owned(),
-        })
+        Self::resolved(link, first["path"].as_str().and_then(|p| p.rsplit('/').next()), "Premiumize")
+    }
+
+    /// https://debrid-link.com/api_doc/v2
+    async fn debrid_link(&self, url: &Url, token: &str) -> Result<Resolved, String> {
+        let body = self
+            .json(
+                self.client
+                    .post("https://debrid-link.com/api/v2/downloader/add")
+                    .bearer_auth(token)
+                    .json(&serde_json::json!({ "url": url.as_str() })),
+            )
+            .await?;
+        if body["success"] != true {
+            return Err(api_error(&body, "error"));
+        }
+        let link = body["value"]["downloadUrl"].as_str().ok_or("Debrid-Link returned no link")?;
+        Self::resolved(link, body["value"]["name"].as_str(), "Debrid-Link")
+    }
+
+    /// https://api-docs.torbox.app: the file is first fetched by TorBox.
+    async fn torbox(&self, url: &Url, token: &str, slot: &Arc<ControlSlot>) -> Result<Resolved, String> {
+        let created = self
+            .json(
+                self.client
+                    .post("https://api.torbox.app/v1/api/webdl/createwebdownload")
+                    .bearer_auth(token)
+                    .form(&[("link", url.as_str())]),
+            )
+            .await?;
+        if created["success"] != true {
+            return Err(api_error(&created, "detail"));
+        }
+        let id = created["data"]["webdownload_id"].as_u64().ok_or("TorBox returned no id")?;
+        for _ in 0..120 {
+            if slot.is_cancelled() {
+                return Err("cancelled".into());
+            }
+            let link = self
+                .json(self.client.get("https://api.torbox.app/v1/api/webdl/requestdl").query(&[
+                    ("token", token.to_owned()),
+                    ("web_id", id.to_string()),
+                    ("zip_link", "false".to_owned()),
+                ]))
+                .await?;
+            if let Some(direct) = link["data"].as_str().filter(|l| l.starts_with("http")) {
+                return Self::resolved(direct, None, "TorBox");
+            }
+            slot.set_status(Some("TorBox is preparing the file…"));
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        Err("TorBox did not finish preparing the file".into())
+    }
+
+    /// https://offcloud.com/api
+    async fn offcloud(&self, url: &Url, key: &str) -> Result<Resolved, String> {
+        let body = self
+            .json(
+                self.client
+                    .post("https://offcloud.com/api/instant/download")
+                    .query(&[("key", key)])
+                    .form(&[("url", url.as_str())]),
+            )
+            .await?;
+        let link = body["url"].as_str().ok_or_else(|| api_error(&body, "error"))?;
+        Self::resolved(link, body["fileName"].as_str(), "Offcloud")
+    }
+
+    /// https://linksnappy.com/api
+    async fn linksnappy(&self, url: &Url, user: &str, password: &str) -> Result<Resolved, String> {
+        let client = free::session_client();
+        let login: Value = client
+            .get("https://linksnappy.com/api/AUTHENTICATE")
+            .query(&[("username", user), ("password", password)])
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        if login["status"] != "OK" {
+            return Err(api_error(&login, "error"));
+        }
+        let request = serde_json::json!({ "link": url.as_str() }).to_string();
+        let body: Value = client
+            .get("https://linksnappy.com/api/linkgen")
+            .query(&[("genLinks", request.as_str())])
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        let item = &body["links"][0];
+        if item["status"] != "OK" {
+            return Err(api_error(item, "error"));
+        }
+        let link = item["generated"].as_str().ok_or("LinkSnappy returned no link")?;
+        Self::resolved(link, item["filename"].as_str(), "LinkSnappy")
+    }
+
+    /// https://www.mega-debrid.eu/index.php?page=api
+    async fn mega_debrid(&self, url: &Url, user: &str, password: &str) -> Result<Resolved, String> {
+        let token = self.mega_debrid_token(user, password).await?;
+        let body = self
+            .json(
+                self.client
+                    .post("https://www.mega-debrid.eu/api.php")
+                    .query(&[("action", "getLink"), ("token", token.as_str())])
+                    .form(&[("link", url.as_str())]),
+            )
+            .await?;
+        if body["response_code"] != "ok" {
+            self.tokens.lock().unwrap_or_else(|e| e.into_inner()).remove(&format!("mega-debrid:{user}"));
+            return Err(api_error(&body, "response_text"));
+        }
+        let link = body["debridLink"].as_str().ok_or("Mega-Debrid returned no link")?.trim_matches('"');
+        Self::resolved(link, None, "Mega-Debrid")
+    }
+
+    async fn mega_debrid_token(&self, user: &str, password: &str) -> Result<String, String> {
+        let key = format!("mega-debrid:{user}");
+        if let Some(token) = self.tokens.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned() {
+            return Ok(token);
+        }
+        let body = self
+            .json(self.client.get("https://www.mega-debrid.eu/api.php").query(&[
+                ("action", "connectUser"),
+                ("login", user),
+                ("password", password),
+            ]))
+            .await?;
+        let token = body["token"].as_str().ok_or_else(|| api_error(&body, "response_text"))?.to_owned();
+        self.tokens.lock().unwrap_or_else(|e| e.into_inner()).insert(key, token.clone());
+        Ok(token)
     }
 
     /// Official API: https://api.1fichier.com/
@@ -249,12 +601,7 @@ impl HosterResolver {
             return Err(api_error(&body, "message"));
         }
         let link = body["url"].as_str().ok_or("1fichier returned no link")?;
-        Ok(Resolved {
-            url: Url::parse(link).map_err(|e| e.to_string())?,
-            headers: Vec::new(),
-            file_name: None,
-            via: "1fichier premium".to_owned(),
-        })
+        Self::resolved(link, None, "1fichier premium")
     }
 
     /// Official API v2: https://rapidgator.net/article/api/
@@ -272,7 +619,8 @@ impl HosterResolver {
             .filter(|id| !id.is_empty())
             .ok_or("this is not a Rapidgator file link")?
             .to_owned();
-        let cached = self.rapidgator_tokens.lock().unwrap_or_else(|e| e.into_inner()).get(login).cloned();
+        let key = format!("rapidgator:{login}");
+        let cached = self.tokens.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
         let token = match cached {
             Some(token) => token,
             None => {
@@ -284,10 +632,7 @@ impl HosterResolver {
                     )
                     .await?;
                 let token = body["response"]["token"].as_str().ok_or_else(|| api_error(&body, "details"))?.to_owned();
-                self.rapidgator_tokens
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(login.to_owned(), token.clone());
+                self.tokens.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), token.clone());
                 token
             }
         };
@@ -300,19 +645,16 @@ impl HosterResolver {
             .await?;
         let Some(link) = body["response"]["download_url"].as_str() else {
             // The session may have expired: log in again next time.
-            self.rapidgator_tokens.lock().unwrap_or_else(|e| e.into_inner()).remove(login);
+            self.tokens.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
             return Err(api_error(&body, "details"));
         };
-        Ok(Resolved {
-            url: Url::parse(link).map_err(|e| e.to_string())?,
-            headers: Vec::new(),
-            file_name: None,
-            via: "Rapidgator premium".to_owned(),
-        })
+        Self::resolved(link, None, "Rapidgator premium")
     }
 
     /// Validates an account and returns a short summary.
     pub async fn check_account(&self, service_id: &str, username: &str, secret: &str) -> Result<AccountCheck, String> {
+        let checked_later =
+            || Ok(AccountCheck { premium: true, summary: "Saved, checked on first download".to_owned() });
         match service_id {
             "real-debrid" => {
                 let body =
@@ -347,6 +689,43 @@ impl HosterResolver {
                 let premium = body["premium_until"].as_u64().is_some_and(|t| t > 0);
                 Ok(AccountCheck { premium, summary: summary(None, premium, None) })
             }
+            "debrid-link" => {
+                let body = self
+                    .json(self.client.get("https://debrid-link.com/api/v2/account/infos").bearer_auth(secret))
+                    .await?;
+                if body["success"] != true {
+                    return Err(api_error(&body, "error"));
+                }
+                let premium = body["value"]["accountType"].as_i64().is_some_and(|t| t > 0);
+                Ok(AccountCheck { premium, summary: summary(body["value"]["pseudo"].as_str(), premium, None) })
+            }
+            "torbox" => {
+                let body =
+                    self.json(self.client.get("https://api.torbox.app/v1/api/user/me").bearer_auth(secret)).await?;
+                if body["success"] != true {
+                    return Err(api_error(&body, "detail"));
+                }
+                let premium = body["data"]["plan"].as_i64().is_some_and(|p| p > 0);
+                Ok(AccountCheck { premium, summary: summary(body["data"]["email"].as_str(), premium, None) })
+            }
+            "mega-debrid" => {
+                self.tokens.lock().unwrap_or_else(|e| e.into_inner()).remove(&format!("mega-debrid:{username}"));
+                self.mega_debrid_token(username, secret).await?;
+                Ok(AccountCheck { premium: true, summary: summary(Some(username), true, None) })
+            }
+            "linksnappy" => {
+                let body = self
+                    .json(
+                        self.client
+                            .get("https://linksnappy.com/api/AUTHENTICATE")
+                            .query(&[("username", username), ("password", secret)]),
+                    )
+                    .await?;
+                if body["status"] != "OK" {
+                    return Err(api_error(&body, "error"));
+                }
+                Ok(AccountCheck { premium: true, summary: summary(Some(username), true, None) })
+            }
             "rapidgator" => {
                 let body = self
                     .json(
@@ -362,10 +741,7 @@ impl HosterResolver {
                 let premium = user["is_premium"].as_bool().unwrap_or(false);
                 Ok(AccountCheck { premium, summary: summary(Some(username), premium, None) })
             }
-            "1fichier" => {
-                // No cheap "who am I" call: the key is checked on first use.
-                Ok(AccountCheck { premium: true, summary: "Saved, checked on first download".to_owned() })
-            }
+            "1fichier" | "offcloud" => checked_later(),
             other => Err(format!("unknown service `{other}`")),
         }
     }
@@ -392,8 +768,8 @@ fn api_error(value: &Value, field: &str) -> String {
 }
 
 impl LinkResolver for HosterResolver {
-    fn resolve<'a>(&'a self, url: &'a Url) -> BoxFuture<'a, Result<Resolved, String>> {
-        Box::pin(self.resolve_inner(url))
+    fn resolve<'a>(&'a self, url: &'a Url, slot: Arc<ControlSlot>) -> BoxFuture<'a, Result<Resolved, String>> {
+        Box::pin(self.resolve_inner(url, slot))
     }
 }
 
@@ -410,7 +786,20 @@ mod tests {
         assert_eq!(hoster_of(&url("https://1fichier.com/?abc")), Some("1fichier"));
         assert_eq!(hoster_of(&url("https://www.dl4free.com/?abc")), Some("1fichier"));
         assert_eq!(hoster_of(&url("https://rg.to/file/123")), Some("Rapidgator"));
+        assert_eq!(hoster_of(&url("https://uploady.to/abc/file.zip")), Some("Uploady"));
+        assert_eq!(hoster_of(&url("https://dailyuploads.net/abc")), Some("Dailyuploads"));
+        assert_eq!(free_mode_of(&url("https://uploady.io/abc")), Some(Free::XFileSharing));
         assert_eq!(hoster_of(&url("https://example.com/a.zip")), None);
+    }
+
+    #[test]
+    fn hoster_domains_are_unique() {
+        let mut seen = HashSet::new();
+        for (_, domains, _) in HOSTERS {
+            for d in *domains {
+                assert!(seen.insert(*d), "{d} listed twice");
+            }
+        }
     }
 
     #[test]
@@ -427,11 +816,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plain_links_stay_direct_and_hosters_explain_what_is_missing() {
+    async fn captcha_hosters_hand_the_page_to_the_user() {
         let resolver = HosterResolver::new(reqwest::Client::new());
-        let plain = resolver.resolve(&url("https://example.com/a.zip")).await.unwrap();
+        resolver.set_enabled_modules(["hoster-free".to_owned()]);
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let sink = opened.clone();
+        resolver.set_captcha_handler(Arc::new(move |page, hoster| sink.lock().unwrap().push((page, hoster))));
+        let slot = Arc::new(ControlSlot::default());
+        let plain = resolver.resolve(&url("https://example.com/a.zip"), slot.clone()).await.unwrap();
         assert_eq!(plain.via, "Direct");
-        let err = resolver.resolve(&url("https://1fichier.com/?abc")).await.unwrap_err();
-        assert!(err.contains("account"), "{err}");
+        let err = resolver.resolve(&url("https://rapidgator.net/file/abc/f.rar.html"), slot).await.unwrap_err();
+        assert!(err.contains("captcha"), "{err}");
+        assert_eq!(opened.lock().unwrap()[0].1, "Rapidgator");
     }
 }

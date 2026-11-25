@@ -1,4 +1,5 @@
-// "Downloads" screen: toolbar, filters, live list, detail pane.
+// "Downloads" screen: toolbar, filters, live list with configurable columns,
+// detail pane.
 
 import { SpinBox, LineEdit, ListView } from "std-widgets.slint";
 import { Theme, Icons, Icon } from "theme.slint";
@@ -8,6 +9,9 @@ export struct JobRow {
     id: int,
     name: string,
     host: string,
+    // Favicon of the hoster, empty until fetched.
+    icon: image,
+    has-icon: bool,
     size: string,
     segs: [float],
     // 0 active, 1 finished, 2 idle
@@ -21,6 +25,27 @@ export struct JobRow {
     selected: bool,
     // HTTP, DDL, VIDEO or AUDIO
     tag: string,
+    package: string,
+    added: string,
+    downloaded: string,
+    conns: string,
+    priority: int,
+    is-archive: bool,
+    has-limit: bool,
+}
+
+// Which optional columns are shown (Name is always there).
+export struct Columns {
+    hoster: bool,
+    size: bool,
+    progress: bool,
+    speed: bool,
+    eta: bool,
+    status: bool,
+    package: bool,
+    added: bool,
+    downloaded: bool,
+    connections: bool,
 }
 
 export struct KeyValue { key: string, value: string }
@@ -39,6 +64,7 @@ export global DownloadsState {
     in property <string> speed-now;
     in property <string> spark-line;
     in property <string> spark-area;
+    in-out property <Columns> columns: { hoster: true, size: true, progress: true, speed: true, eta: true, status: true };
 
     in property <bool> has-selection;
     in property <string> detail-title;
@@ -55,20 +81,40 @@ export global DownloadsState {
     callback add-links();
     callback start-all();
     callback pause-all();
+    callback clear-finished();
     callback select(int);
     callback activate(int);
     callback pause-resume(int);
     callback row-action(int, string);
+    callback toggle-column(string);
+}
+
+component ColumnsMenu inherits ContextMenuArea {
+    Menu {
+        MenuItem { title: @tr("Hoster"); checkable: true; checked: DownloadsState.columns.hoster; activated => { DownloadsState.toggle-column("hoster"); } }
+        MenuItem { title: @tr("Size"); checkable: true; checked: DownloadsState.columns.size; activated => { DownloadsState.toggle-column("size"); } }
+        MenuItem { title: @tr("Progress"); checkable: true; checked: DownloadsState.columns.progress; activated => { DownloadsState.toggle-column("progress"); } }
+        MenuItem { title: @tr("Downloaded"); checkable: true; checked: DownloadsState.columns.downloaded; activated => { DownloadsState.toggle-column("downloaded"); } }
+        MenuItem { title: @tr("Speed"); checkable: true; checked: DownloadsState.columns.speed; activated => { DownloadsState.toggle-column("speed"); } }
+        MenuItem { title: @tr("ETA"); checkable: true; checked: DownloadsState.columns.eta; activated => { DownloadsState.toggle-column("eta"); } }
+        MenuItem { title: @tr("Status"); checkable: true; checked: DownloadsState.columns.status; activated => { DownloadsState.toggle-column("status"); } }
+        MenuItem { title: @tr("Package"); checkable: true; checked: DownloadsState.columns.package; activated => { DownloadsState.toggle-column("package"); } }
+        MenuItem { title: @tr("Connections"); checkable: true; checked: DownloadsState.columns.connections; activated => { DownloadsState.toggle-column("connections"); } }
+        MenuItem { title: @tr("Added"); checkable: true; checked: DownloadsState.columns.added; activated => { DownloadsState.toggle-column("added"); } }
+        MenuSeparator {}
+        MenuItem { title: @tr("Reset columns"); activated => { DownloadsState.toggle-column("reset"); } }
+    }
 }
 
 component DownloadRow inherits Rectangle {
     in property <JobRow> job;
+    in property <bool> compact;
     callback select();
     callback activate();
     callback pause-resume();
     callback action(string);
 
-    height: 34px;
+    height: compact ? 26px : 34px;
     background: job.selected ? Theme.accs : ta.has-hover ? Theme.hov : transparent;
 
     function status-color() -> color {
@@ -80,18 +126,54 @@ component DownloadRow inherits Rectangle {
 
     ContextMenuArea {
         Menu {
-            MenuItem {
-                title: job.status-kind == 6 ? @tr("Resume") : job.status-kind == 5 ? @tr("Retry") : @tr("Pause");
-                enabled: job.status-kind != 4;
-                activated => { root.pause-resume(); }
+            MenuItem { title: @tr("Start"); enabled: job.status-kind == 0 || job.status-kind == 6 || job.status-kind == 5; activated => { root.action("start"); } }
+            MenuItem { title: @tr("Force start"); enabled: job.status-kind != 1 && job.status-kind != 4; activated => { root.action("force-start"); } }
+            MenuItem { title: @tr("Pause"); enabled: job.status-kind == 0 || job.status-kind == 1; activated => { root.action("pause"); } }
+            MenuItem { title: @tr("Stop and reset"); enabled: job.status-kind != 4; activated => { root.action("reset"); } }
+            MenuItem { title: @tr("Restart from zero"); activated => { root.action("restart"); } }
+            MenuSeparator {}
+            Menu {
+                title: @tr("Priority");
+                MenuItem { title: @tr("Highest"); checkable: true; checked: job.priority == 2; activated => { root.action("priority:2"); } }
+                MenuItem { title: @tr("High"); checkable: true; checked: job.priority == 1; activated => { root.action("priority:1"); } }
+                MenuItem { title: @tr("Normal"); checkable: true; checked: job.priority == 0; activated => { root.action("priority:0"); } }
+                MenuItem { title: @tr("Low"); checkable: true; checked: job.priority == -1; activated => { root.action("priority:-1"); } }
+                MenuItem { title: @tr("Lowest"); checkable: true; checked: job.priority == -2; activated => { root.action("priority:-2"); } }
             }
+            Menu {
+                title: @tr("Move");
+                MenuItem { title: @tr("To the top"); activated => { root.action("move:top"); } }
+                MenuItem { title: @tr("Move up"); activated => { root.action("move:up"); } }
+                MenuItem { title: @tr("Move down"); activated => { root.action("move:down"); } }
+                MenuItem { title: @tr("To the bottom"); activated => { root.action("move:bottom"); } }
+            }
+            Menu {
+                title: @tr("Connections");
+                MenuItem { title: "1"; activated => { root.action("connections:1"); } }
+                MenuItem { title: "2"; activated => { root.action("connections:2"); } }
+                MenuItem { title: "4"; activated => { root.action("connections:4"); } }
+                MenuItem { title: "8"; activated => { root.action("connections:8"); } }
+                MenuItem { title: "16"; activated => { root.action("connections:16"); } }
+            }
+            MenuItem { title: @tr("Speed limit for this file…"); activated => { root.action("file-limit"); } }
+            MenuItem { title: @tr("Remove speed limit"); enabled: job.has-limit; activated => { root.action("file-limit:0"); } }
             MenuSeparator {}
             MenuItem { title: @tr("Open file"); enabled: job.status-kind == 4; activated => { root.action("open-file"); } }
             MenuItem { title: @tr("Open folder"); activated => { root.action("open-folder"); } }
-            MenuItem { title: @tr("Copy link"); activated => { root.action("copy-link"); } }
+            MenuItem { title: @tr("Extract now"); enabled: job.status-kind == 4 && job.is-archive; activated => { root.action("extract"); } }
+            Menu {
+                title: @tr("Copy");
+                MenuItem { title: @tr("Link"); activated => { root.action("copy-link"); } }
+                MenuItem { title: @tr("File name"); activated => { root.action("copy-name"); } }
+                MenuItem { title: @tr("File path"); activated => { root.action("copy-path"); } }
+            }
+            MenuItem { title: @tr("Rename…"); activated => { root.action("rename"); } }
+            MenuItem { title: @tr("Change folder…"); activated => { root.action("change-folder"); } }
+            MenuItem { title: @tr("Properties"); activated => { root.action("properties"); } }
             MenuSeparator {}
             MenuItem { title: @tr("Remove from list"); activated => { root.action("remove"); } }
             MenuItem { title: @tr("Delete with files"); activated => { root.action("delete"); } }
+            MenuItem { title: @tr("Remove all finished"); activated => { root.action("clear-finished"); } }
         }
 
         ta := TouchArea {
@@ -130,11 +212,20 @@ component DownloadRow inherits Rectangle {
                     }
                 }
             }
+            if job.priority > 0: VerticalLayout { alignment: center; Icon { width: 12px; height: 12px; commands: Icons.up; stroke: Theme.wa; stroke-width: 2.4px; } }
+            if job.priority < 0: VerticalLayout { alignment: center; Icon { width: 12px; height: 12px; commands: Icons.chevron-down; stroke: Theme.mut; stroke-width: 2.4px; } }
             Cell { text: job.name; horizontal-stretch: 1; min-width: 0; }
         }
-        Cell { text: job.host; width: 150px; font-size: 13px; color: Theme.mut; }
-        Cell { text: job.size; width: 82px; horizontal-alignment: right; }
-        HorizontalLayout {
+        if DownloadsState.columns.hoster: HorizontalLayout {
+            width: 160px;
+            spacing: 6px;
+            if job.has-icon: VerticalLayout { alignment: center; Image { width: 16px; height: 16px; source: job.icon; } }
+            Cell { text: job.host; font-size: 13px; color: Theme.mut; }
+        }
+        if DownloadsState.columns.package: Cell { text: job.package; width: 140px; font-size: 13px; color: Theme.mut; }
+        if DownloadsState.columns.size: Cell { text: job.size; width: 82px; horizontal-alignment: right; }
+        if DownloadsState.columns.downloaded: Cell { text: job.downloaded; width: 82px; horizontal-alignment: right; color: Theme.mut; }
+        if DownloadsState.columns.progress: HorizontalLayout {
             width: 170px;
             spacing: 6px;
             VerticalLayout {
@@ -144,10 +235,12 @@ component DownloadRow inherits Rectangle {
             }
             Cell { text: job.percent; width: 38px; font-size: 12px; color: Theme.mut; horizontal-alignment: right; }
         }
-        Cell { text: job.speed; width: 92px; horizontal-alignment: right; }
-        Cell { text: job.eta; width: 76px; horizontal-alignment: right; }
-        HorizontalLayout {
-            width: 170px;
+        if DownloadsState.columns.speed: Cell { text: job.speed; width: 92px; horizontal-alignment: right; }
+        if DownloadsState.columns.eta: Cell { text: job.eta; width: 76px; horizontal-alignment: right; }
+        if DownloadsState.columns.connections: Cell { text: job.conns; width: 56px; horizontal-alignment: right; color: Theme.mut; }
+        if DownloadsState.columns.added: Cell { text: job.added; width: 120px; color: Theme.mut; font-size: 12.5px; }
+        if DownloadsState.columns.status: HorizontalLayout {
+            width: 190px;
             spacing: 6px;
             if job.status-kind == 1 || job.status-kind == 4 || job.status-kind == 5: VerticalLayout {
                 alignment: center;
@@ -174,6 +267,8 @@ component DownloadRow inherits Rectangle {
 }
 
 export component DownloadsPage inherits VerticalLayout {
+    in property <bool> compact;
+
     // Toolbar.
     Rectangle {
         height: 52px;
@@ -185,6 +280,7 @@ export component DownloadsPage inherits VerticalLayout {
             VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { primary: true; icon: Icons.plus; text: @tr("Add links"); clicked => { DownloadsState.add-links(); } } }
             VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { icon: Icons.play; text: @tr("Start all"); clicked => { DownloadsState.start-all(); } } }
             VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { icon: Icons.pause; text: @tr("Pause all"); clicked => { DownloadsState.pause-all(); } } }
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { icon: Icons.trash; text: @tr("Remove finished"); clicked => { DownloadsState.clear-finished(); } } }
             VerticalLayout { alignment: center; Rectangle { width: 1px; height: 24px; background: Theme.ln; } }
             Text { text: @tr("Parallel"); font-size: 13px; color: Theme.mut; vertical-alignment: center; }
             VerticalLayout {
@@ -260,23 +356,33 @@ export component DownloadsPage inherits VerticalLayout {
         }
     }
 
-    // Column header.
+    // Column header: right-click to choose the columns.
     Rectangle {
         height: 30px;
         background: Theme.chr;
         HLine { y: parent.height - 1px; }
-        HorizontalLayout {
-            padding-left: 12px;
-            padding-right: 12px;
-            spacing: 10px;
-            HeaderCell { text: @tr("Name"); horizontal-stretch: 1; }
-            HeaderCell { text: @tr("Hoster"); width: 150px; }
-            HeaderCell { text: @tr("Size"); width: 82px; horizontal-alignment: right; }
-            HeaderCell { text: @tr("Progress"); width: 170px; }
-            HeaderCell { text: @tr("Speed"); width: 92px; horizontal-alignment: right; }
-            HeaderCell { text: @tr("ETA"); width: 76px; horizontal-alignment: right; }
-            HeaderCell { text: @tr("Status"); width: 170px; }
-            Rectangle { width: 40px; }
+        ColumnsMenu {
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+                HeaderCell { text: @tr("Name"); horizontal-stretch: 1; }
+                if DownloadsState.columns.hoster: HeaderCell { text: @tr("Hoster"); width: 160px; }
+                if DownloadsState.columns.package: HeaderCell { text: @tr("Package"); width: 140px; }
+                if DownloadsState.columns.size: HeaderCell { text: @tr("Size"); width: 82px; horizontal-alignment: right; }
+                if DownloadsState.columns.downloaded: HeaderCell { text: @tr("Downloaded"); width: 82px; horizontal-alignment: right; }
+                if DownloadsState.columns.progress: HeaderCell { text: @tr("Progress"); width: 170px; }
+                if DownloadsState.columns.speed: HeaderCell { text: @tr("Speed"); width: 92px; horizontal-alignment: right; }
+                if DownloadsState.columns.eta: HeaderCell { text: @tr("ETA"); width: 76px; horizontal-alignment: right; }
+                if DownloadsState.columns.connections: HeaderCell { text: @tr("Conn."); width: 56px; horizontal-alignment: right; }
+                if DownloadsState.columns.added: HeaderCell { text: @tr("Added"); width: 120px; }
+                if DownloadsState.columns.status: HeaderCell { text: @tr("Status"); width: 190px; }
+                VerticalLayout {
+                    width: 40px;
+                    alignment: center;
+                    IconBtn { size: 24px; icon: Icons.columns; tooltip: @tr("Choose columns (right-click)"); }
+                }
+            }
         }
     }
 
@@ -302,6 +408,7 @@ export component DownloadsPage inherits VerticalLayout {
             height: 100%;
             for job[i] in DownloadsState.rows: DownloadRow {
                 job: job;
+                compact: root.compact;
                 select => { DownloadsState.select(i); }
                 activate => { DownloadsState.activate(i); }
                 pause-resume => { DownloadsState.pause-resume(i); }

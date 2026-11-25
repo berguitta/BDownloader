@@ -1,6 +1,6 @@
 //! Application state shared by the UI callbacks and the refresh timer.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -10,12 +10,11 @@ use bd_core::accounts::{service, AccountStore, ServiceKind};
 use bd_core::clicknload::Received;
 use bd_core::extract::{ExtractOptions, ExtractReport};
 use bd_core::grabber::{Grabber, LinkStatus};
-use bd_core::hosters::{AccountCheck, HosterResolver};
+use bd_core::hosters::{AccountCheck, CaptchaMode, HosterResolver, ResolverOptions};
 use bd_core::manager::{save_records, ManagerConfig, ManagerEvent};
-use bd_core::modules::ModuleStatus;
 use bd_core::task::ControlSlot;
 use bd_core::tools::{self, Tool};
-use bd_core::video::{is_video_url, VideoBackend, VideoFormat};
+use bd_core::video::{is_video_url, VideoBackend, VideoFormat, VideoOptions};
 use bd_core::{DownloadManager, JobId, JobKind, JobSnapshot, JobSpec, JobState, ModuleRegistry, Settings};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio::runtime::Handle;
@@ -27,7 +26,7 @@ use crate::tray::Tray;
 use crate::{
     format, platform, AccountRow, AppWindow, Connection, DownloadsState, GrabRow, GrabberState, JobRow, KeyValue,
 };
-use crate::{AccountsState, ModuleRow, SettingsState};
+use crate::{AccountsState, ExtractRow, ExtractionState, SettingsState};
 
 const TOAST_DURATION: Duration = Duration::from_millis(2600);
 pub const HISTORY_SECONDS: usize = 60;
@@ -50,6 +49,19 @@ pub enum UiMsg {
         package: String,
         report: ExtractReport,
     },
+    Favicon {
+        host: String,
+        image: Option<(Vec<u8>, u32, u32)>,
+    },
+}
+
+/// One archive on the Extraction screen.
+pub struct ExtractJob {
+    pub archive: PathBuf,
+    pub package: String,
+    pub dir: PathBuf,
+    /// None while running.
+    pub outcome: Option<Result<usize, String>>,
 }
 
 pub struct App {
@@ -85,6 +97,12 @@ pub struct App {
     pub clicknload_status: String,
     pub tool_slot: Option<(Tool, Arc<ControlSlot>)>,
     pub quitting: bool,
+    pub favicons: HashMap<String, Option<slint::Image>>,
+    pub extract_jobs: Vec<ExtractJob>,
+    pub extract_revision: u64,
+    /// Job and action waiting for the input dialog (rename, file limit).
+    pub input_action: Option<(JobId, String)>,
+    pub was_busy: bool,
 }
 
 impl App {
@@ -117,6 +135,12 @@ impl App {
             connections: settings.connections_per_download,
             multi_connection: modules.is_enabled("multi-connection"),
             resume: modules.is_enabled("resume"),
+            if_exists: match settings.text("if-exists", "rename") {
+                "skip" => bd_net::IfExists::Skip,
+                "overwrite" => bd_net::IfExists::Overwrite,
+                _ => bd_net::IfExists::Rename,
+            },
+            preallocate: settings.flag("preallocate", true),
         }
     }
 
@@ -130,6 +154,16 @@ impl App {
             self.modules.list().into_iter().filter(|(_, on)| *on).map(|(m, _)| m.id.to_owned()).collect();
         self.resolver.set_enabled_modules(enabled);
         self.resolver.set_credentials(self.accounts.credentials());
+        self.resolver.set_options(ResolverOptions {
+            prefer_debrid: self.settings.flag("prefer-debrid", false),
+            free_fallback: self.settings.flag("free-fallback", true),
+            captcha: match self.settings.text("captcha-mode", "browser") {
+                "notify" => CaptchaMode::Notify,
+                "skip" => CaptchaMode::Skip,
+                _ => CaptchaMode::Browser,
+            },
+        });
+        self.grabber.set_page_scan(self.modules.is_enabled("page-scan"));
         let backend = self.video_backend();
         self.manager.set_video_backend(backend.clone());
         self.grabber.set_video_backend(backend);
@@ -139,7 +173,15 @@ impl App {
         if !self.modules.is_enabled("video") {
             return None;
         }
-        Some(VideoBackend { yt_dlp: tools::find(Tool::YtDlp)?, ffmpeg: tools::find(Tool::Ffmpeg) })
+        let options = VideoOptions {
+            container: self.settings.text("video-container", "mp4").to_owned(),
+            subtitles: self
+                .settings
+                .flag("subtitles", false)
+                .then(|| self.settings.text("subtitle-langs", "en, fr").to_owned()),
+            embed_metadata: self.settings.flag("embed-metadata", true),
+        };
+        Some(VideoBackend { yt_dlp: tools::find(Tool::YtDlp)?, ffmpeg: tools::find(Tool::Ffmpeg), options })
     }
 
     /// Entry point for every new link: to the grabber, or straight to the
@@ -151,14 +193,166 @@ impl App {
         if self.settings.auto_start_grabbed && !force_grabber {
             let count = links.len();
             for url in links {
-                let kind =
-                    if is_video_url(&url) { JobKind::Video { format: VideoFormat::Best } } else { JobKind::Http };
+                let kind = if is_video_url(&url) {
+                    JobKind::Video { format: self.default_video_format() }
+                } else {
+                    JobKind::Http
+                };
                 self.manager.add_spec(JobSpec { kind, ..JobSpec::http(url, self.settings.download_dir.clone()) });
             }
             count
         } else {
             self.grabber.add(links, source)
         }
+    }
+
+    fn default_video_format(&self) -> VideoFormat {
+        match self.settings.text("video-quality", "best") {
+            "2160" => VideoFormat::MaxHeight { height: 2160 },
+            "1080" => VideoFormat::MaxHeight { height: 1080 },
+            "720" => VideoFormat::MaxHeight { height: 720 },
+            "audio" => VideoFormat::AudioBest,
+            "mp3" => VideoFormat::AudioMp3,
+            _ => VideoFormat::Best,
+        }
+    }
+
+    pub fn notify(&self, level_error: bool, title: &str, body: &str) {
+        if !self.modules.is_enabled("notifications") {
+            return;
+        }
+        let wanted = match self.settings.text("notifications", "finished-errors") {
+            "none" => false,
+            "errors" => level_error,
+            _ => true,
+        };
+        if wanted {
+            platform::notify(title, body);
+        }
+    }
+
+    /// Favicon of a host, fetched once in the background.
+    pub fn favicon(&mut self, host: &str) -> Option<slint::Image> {
+        if let Some(icon) = self.favicons.get(host) {
+            return icon.clone();
+        }
+        self.favicons.insert(host.to_owned(), None);
+        let (host, sender, client) = (host.to_owned(), self.sender.clone(), self.manager.engine().client().clone());
+        self.runtime.spawn(async move {
+            let image = crate::favicon::fetch(&client, &host).await;
+            let _ = sender.send(UiMsg::Favicon { host, image });
+        });
+        None
+    }
+
+    pub fn rebuild_tray(&mut self) {
+        if !self.modules.is_enabled("tray") {
+            self.tray = None;
+            return;
+        }
+        self.tray = None;
+        match Tray::new(self.modules.is_enabled("clipboard")) {
+            Ok(tray) => self.tray = Some(tray),
+            Err(e) => tracing::warn!(error = %e, "cannot create the tray icon"),
+        }
+    }
+
+    pub fn restart_clicknload(&mut self) {
+        if let Some(cancel) = self.clicknload.take() {
+            cancel.cancel();
+        }
+        self.sync_clicknload();
+    }
+
+    /// Extracts the archives of a finished package in the background.
+    pub fn start_extraction(&mut self, package: String, dir: PathBuf, files: Vec<PathBuf>, password: Option<String>) {
+        let firsts: Vec<PathBuf> = files
+            .iter()
+            .filter(|f| f.file_name().and_then(|n| n.to_str()).is_some_and(bd_core::packages::is_first_volume))
+            .cloned()
+            .collect();
+        if firsts.is_empty() {
+            return;
+        }
+        for archive in &firsts {
+            self.extract_jobs.retain(|j| &j.archive != archive);
+            self.extract_jobs.push(ExtractJob {
+                archive: archive.clone(),
+                package: package.clone(),
+                dir: dir.clone(),
+                outcome: None,
+            });
+        }
+        self.extract_revision += 1;
+        let options = ExtractOptions {
+            passwords: if self.settings.flag("try-passwords", true) {
+                self.settings.archive_passwords.clone()
+            } else {
+                Vec::new()
+            },
+            delete_archives: self.settings.delete_archives,
+        };
+        let target = if self.settings.text("extract-into", "package") == "subfolder" {
+            let first =
+                firsts[0].file_name().and_then(|n| n.to_str()).map(bd_core::packages::package_name).unwrap_or_default();
+            dir.join(first)
+        } else {
+            dir
+        };
+        let sender = self.sender.clone();
+        self.runtime.spawn_blocking(move || {
+            let report = bd_core::extract::extract_package(&files, &target, password.as_deref(), &options);
+            let _ = sender.send(UiMsg::Extracted { package, report });
+        });
+    }
+
+    pub fn refresh_extraction(&mut self, ui: &AppWindow, force: bool) {
+        if !force && self.extract_revision == 0 {
+            return;
+        }
+        let rows: Vec<ExtractRow> = self
+            .extract_jobs
+            .iter()
+            .rev()
+            .map(|j| {
+                let name = j.archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let format = j.archive.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+                let (status, kind) = match &j.outcome {
+                    None => ("Extracting…".to_owned(), 1),
+                    Some(Ok(n)) => (format!("Done · {n} files"), 2),
+                    Some(Err(e)) => (e.clone(), 3),
+                };
+                ExtractRow {
+                    archive: name.into(),
+                    package: j.package.as_str().into(),
+                    format: format.into(),
+                    status: status.into(),
+                    kind,
+                }
+            })
+            .collect();
+        let running = self.extract_jobs.iter().filter(|j| j.outcome.is_none()).count();
+        ui.set_extract_badge(if running > 0 { running.to_string() } else { String::new() }.into());
+        ui.global::<ExtractionState>().set_jobs(ModelRc::new(VecModel::from(rows)));
+        self.extract_revision = 0;
+    }
+
+    /// "When the queue is finished" action, once the last download ends.
+    fn check_queue_done(&mut self, _ui: &AppWindow) {
+        let busy = self.jobs.iter().any(|j| matches!(j.state, JobState::Downloading | JobState::Queued));
+        let finished_something = self.jobs.iter().any(|j| j.state == JobState::Finished);
+        if self.was_busy && !busy && finished_something {
+            match self.settings.text("when-done", "nothing") {
+                "close" => {
+                    self.quitting = true;
+                    let _ = slint::quit_event_loop();
+                }
+                "sleep" => platform::sleep_computer(),
+                "shutdown" => platform::shutdown_computer(),
+                _ => {}
+            }
+        }
+        self.was_busy = busy;
     }
 
     pub fn job_at(&self, row: i32) -> Option<&JobSnapshot> {
@@ -172,7 +366,9 @@ impl App {
         self.handle_events();
         self.refresh_downloads(ui);
         self.refresh_grabber(ui, false);
+        self.refresh_extraction(ui, false);
         self.refresh_tool_status(ui);
+        self.check_queue_done(ui);
 
         if self.manager.revision() != self.saved_revision && self.last_save.elapsed() > Duration::from_secs(2) {
             self.save_queue();
@@ -207,6 +403,15 @@ impl App {
         ui.set_status_active(active.to_string().into());
         ui.set_status_queued(queued.to_string().into());
         ui.set_status_folder(self.settings.download_dir.display().to_string().into());
+        let limit = self.settings.speed_limit_kib;
+        let limited = limit > 0 && self.modules.is_enabled("speed-limit");
+        ui.set_speed_limited(limited);
+        ui.set_speed_limit_label(if limited { format::speed(limit as f64 * 1024.0) } else { t("Unlimited") }.into());
+        ui.set_window_title(if self.settings.flag("speed-in-title", false) && speed >= 1.0 {
+            format!("{} · BDownloader", format::speed(speed)).into()
+        } else {
+            "BDownloader".into()
+        });
         if let Some(tray) = &self.tray {
             let tip = if active > 0 {
                 format!("BDownloader · {active} ↓ · {}", format::speed(speed))
@@ -247,7 +452,8 @@ impl App {
             })
             .collect();
         let ids: Vec<JobId> = visible.iter().map(|j| j.id).collect();
-        let rows: Vec<JobRow> = visible.iter().map(|j| job_row(j, self.selected == Some(j.id))).collect();
+        let visible: Vec<JobSnapshot> = visible.into_iter().cloned().collect();
+        let rows: Vec<JobRow> = visible.iter().map(|j| self.job_row(j)).collect();
         if ids == self.row_ids {
             for (i, row) in rows.into_iter().enumerate() {
                 if self.rows.row_data(i).as_ref() != Some(&row) {
@@ -334,6 +540,9 @@ impl App {
         }
         self.grab_revision = revision;
         let links = self.grabber.snapshot();
+        for link in &links {
+            self.favicon(&favicon_host(&link.url));
+        }
         let state = ui.global::<GrabberState>();
         let mut packages: Vec<String> = Vec::new();
         for link in &links {
@@ -358,6 +567,8 @@ impl App {
                 package: package.as_str().into(),
                 name: name.into(),
                 host: SharedString::new(),
+                has_icon: false,
+                icon: Default::default(),
                 size: if size > 0 { format::bytes(size) } else { String::new() }.into(),
                 status: format!("{} · {} ✓", members.len(), online).into(),
                 status_kind: 1,
@@ -384,7 +595,7 @@ impl App {
                 let (status, kind) = match &link.status {
                     LinkStatus::Checking => (t("Checking…"), 0),
                     LinkStatus::Online => (t("Online"), 1),
-                    LinkStatus::Unchecked => (t("Needs an account to check"), 2),
+                    LinkStatus::Unchecked => (t("Checked when downloading"), 2),
                     LinkStatus::Offline(reason) => (reason.clone(), 3),
                 };
                 let formats: Vec<SharedString> = link
@@ -407,6 +618,8 @@ impl App {
                     package: package.as_str().into(),
                     name: link.name.as_str().into(),
                     host: link.host().into(),
+                    has_icon: self.favicons.get(&favicon_host(&link.url)).is_some_and(|i| i.is_some()),
+                    icon: self.favicons.get(&favicon_host(&link.url)).cloned().flatten().unwrap_or_default(),
                     size: link.size.map(format::bytes).unwrap_or_default().into(),
                     status: status.into(),
                     status_kind: kind,
@@ -464,29 +677,8 @@ impl App {
         state.set_accounts(ModelRc::new(VecModel::from(rows)));
     }
 
-    pub fn module_rows(&self) -> Vec<ModuleRow> {
-        let mut last_category = None;
-        self.modules
-            .list()
-            .into_iter()
-            .map(|(info, enabled)| {
-                let first = last_category != Some(info.category);
-                last_category = Some(info.category);
-                ModuleRow {
-                    id: info.id.into(),
-                    name: info.name.into(),
-                    description: info.description.into(),
-                    category: info.category.label().into(),
-                    first_in_category: first,
-                    enabled,
-                    available: info.status == ModuleStatus::Available,
-                }
-            })
-            .collect()
-    }
-
     pub fn refresh_modules(&self, ui: &AppWindow) {
-        ui.global::<SettingsState>().set_modules(ModelRc::new(VecModel::from(self.module_rows())));
+        crate::settings_view::refresh(self, ui);
         let g = ui.global::<GrabberState>();
         g.set_clipboard_on(self.modules.is_enabled("clipboard"));
         g.set_clicknload_on(self.modules.is_enabled("click-n-load"));
@@ -533,27 +725,21 @@ impl App {
         for event in drained {
             match event {
                 ManagerEvent::JobFailed { name, error, .. } => {
-                    if self.modules.is_enabled("notifications") {
-                        platform::notify(&t("Download failed"), &format!("{name}\n{error}"));
+                    self.notify(true, &t("Download failed"), &format!("{name}\n{error}"));
+                }
+                ManagerEvent::JobFinished { name, .. } => {
+                    if self.settings.text("notifications", "finished-errors") == "all" {
+                        self.notify(false, &t("Download finished"), &name);
                     }
                 }
-                ManagerEvent::JobFinished { .. } => {}
                 ManagerEvent::PackageFinished { package, dir, files, password } => {
                     let has_archives = files.iter().any(|f| {
                         f.file_name().and_then(|n| n.to_str()).is_some_and(bd_core::packages::is_first_volume)
                     });
                     if has_archives && self.modules.is_enabled("extraction") {
-                        let options = ExtractOptions {
-                            passwords: self.settings.archive_passwords.clone(),
-                            delete_archives: self.settings.delete_archives,
-                        };
-                        let sender = self.sender.clone();
-                        self.runtime.spawn_blocking(move || {
-                            let report = bd_core::extract::extract_package(&files, &dir, password.as_deref(), &options);
-                            let _ = sender.send(UiMsg::Extracted { package, report });
-                        });
-                    } else if self.modules.is_enabled("notifications") {
-                        platform::notify(&t("Package finished"), &package);
+                        self.start_extraction(package, dir, files, password);
+                    } else {
+                        self.notify(false, &t("Package finished"), &package);
                     }
                 }
             }
@@ -626,16 +812,27 @@ impl App {
                         }
                     }
                     self.toast(format!("Click'n'Load: {count}"));
-                    if self.modules.is_enabled("notifications") {
-                        platform::notify("Click'n'Load", &format!("{count} · {source}"));
-                    }
+                    self.notify(false, "Click'n'Load", &format!("{count} · {source}"));
                 }
                 UiMsg::ClickNLoadStopped(error) => {
                     self.clicknload = None;
                     self.clicknload_status = error;
                     self.refresh_modules(ui);
                 }
+                UiMsg::Favicon { host, image } => {
+                    let icon = image.map(|(rgba, w, h)| {
+                        slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(&rgba, w, h))
+                    });
+                    self.favicons.insert(host, icon);
+                    self.grab_revision = u64::MAX;
+                }
                 UiMsg::Extracted { package, report } => {
+                    for result in &report.results {
+                        if let Some(job) = self.extract_jobs.iter_mut().find(|j| j.archive == result.archive) {
+                            job.outcome = Some(result.outcome.clone());
+                        }
+                    }
+                    self.extract_revision += 1;
                     let files: usize = report.results.iter().filter_map(|r| r.outcome.as_ref().ok()).sum();
                     let errors: Vec<String> = report
                         .results
@@ -648,9 +845,7 @@ impl App {
                         (t("Extraction failed"), format!("{package}\n{}", errors.join("\n")))
                     };
                     self.toast(format!("{title}: {package}"));
-                    if self.modules.is_enabled("notifications") {
-                        platform::notify(&title, &body);
-                    }
+                    self.notify(!errors.is_empty(), &title, &body);
                 }
             }
         }
@@ -710,84 +905,110 @@ impl App {
     }
 }
 
-fn job_row(job: &JobSnapshot, selected: bool) -> JobRow {
-    let fraction = match job.total {
-        Some(0) => 1.0,
-        Some(total) => job.downloaded as f64 / total as f64,
-        None if job.state == JobState::Finished => 1.0,
-        None => 0.0,
-    };
-    let segs: Vec<f32> = if job.segments.is_empty() {
-        vec![fraction as f32]
-    } else {
-        job.segments
-            .iter()
-            .map(|s| match s.len {
-                Some(0) => 1.0,
-                Some(len) => (s.done as f64 / len as f64) as f32,
-                None => {
-                    if job.state == JobState::Finished {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-            })
-            .collect()
-    };
-    let (status, kind) = match &job.state {
-        JobState::Queued => (t("Queued"), 0),
-        JobState::Downloading if job.status.is_some() => (t(job.status.as_deref().unwrap_or_default()), 1),
-        JobState::Downloading if job.total.is_none() && job.downloaded == 0 => (t("Connecting…"), 1),
-        // The host limits connections: segments wait for a free slot.
-        JobState::Downloading if job.connections == 0 => (t("Waiting for a connection"), 1),
-        JobState::Downloading => (
-            if job.connections > 1 {
-                format!("{} · {} conn", t("Downloading"), job.connections)
-            } else {
-                t("Downloading")
-            },
-            1,
-        ),
-        JobState::Paused => (t("Paused"), 6),
-        JobState::Finished => (t("Finished"), 4),
-        JobState::Failed(e) => (short_error(e), 5),
-    };
-    let tag = match job.spec.kind {
-        JobKind::Video { ref format } if matches!(format, VideoFormat::AudioBest | VideoFormat::AudioMp3) => "AUDIO",
-        JobKind::Video { .. } => "VIDEO",
-        JobKind::Http => match bd_core::hosters::hoster_of(&job.url) {
-            Some(_) => "DDL",
-            None => "HTTP",
-        },
-    };
-    JobRow {
-        id: job.id as i32,
-        name: job.name.as_str().into(),
-        host: bd_core::hosters::hoster_of(&job.url)
-            .map(str::to_owned)
-            .unwrap_or_else(|| job.url.host_str().unwrap_or_default().to_owned())
-            .into(),
-        size: job.total.map(format::bytes).unwrap_or_default().into(),
-        segs: ModelRc::new(VecModel::from(segs)),
-        bar_kind: match job.state {
-            JobState::Finished => 1,
-            JobState::Downloading => 0,
-            _ => 2,
-        },
-        percent: if job.total.is_some() || job.state == JobState::Finished {
-            format!("{}%", (fraction * 100.0).floor())
+impl App {
+    fn job_row(&mut self, job: &JobSnapshot) -> JobRow {
+        let selected = self.selected == Some(job.id);
+        let icon_host = favicon_host(&job.url);
+        let icon = self.favicon(&icon_host);
+        let fraction = match job.total {
+            Some(0) => 1.0,
+            Some(total) => job.downloaded as f64 / total as f64,
+            None if job.state == JobState::Finished => 1.0,
+            None => 0.0,
+        };
+        let segs: Vec<f32> = if job.segments.is_empty() {
+            vec![fraction as f32]
         } else {
-            String::new()
+            job.segments
+                .iter()
+                .map(|s| match s.len {
+                    Some(0) => 1.0,
+                    Some(len) => (s.done as f64 / len as f64) as f32,
+                    None => {
+                        if job.state == JobState::Finished {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                })
+                .collect()
+        };
+        let (status, kind) = match &job.state {
+            JobState::Queued => (t("Queued"), 0),
+            JobState::Downloading if job.status.is_some() => (t(job.status.as_deref().unwrap_or_default()), 1),
+            JobState::Downloading if job.total.is_none() && job.downloaded == 0 => (t("Connecting…"), 1),
+            // The host limits connections: segments wait for a free slot.
+            JobState::Downloading if job.connections == 0 => (t("Waiting for a connection"), 1),
+            JobState::Downloading => (
+                if job.connections > 1 {
+                    format!("{} · {} conn", t("Downloading"), job.connections)
+                } else {
+                    t("Downloading")
+                },
+                1,
+            ),
+            JobState::Paused => (t("Paused"), 6),
+            JobState::Finished => (t("Finished"), 4),
+            JobState::Failed(e) => (short_error(e), 5),
+        };
+        let tag = match job.spec.kind {
+            JobKind::Video { ref format } if matches!(format, VideoFormat::AudioBest | VideoFormat::AudioMp3) => {
+                "AUDIO"
+            }
+            JobKind::Video { .. } => "VIDEO",
+            JobKind::Http => match bd_core::hosters::hoster_of(&job.url) {
+                Some(_) => "DDL",
+                None => "HTTP",
+            },
+        };
+        JobRow {
+            id: job.id as i32,
+            name: job.name.as_str().into(),
+            host: bd_core::hosters::hoster_of(&job.url)
+                .map(str::to_owned)
+                .unwrap_or_else(|| job.url.host_str().unwrap_or_default().to_owned())
+                .into(),
+            size: job.total.map(format::bytes).unwrap_or_default().into(),
+            segs: ModelRc::new(VecModel::from(segs)),
+            bar_kind: match job.state {
+                JobState::Finished => 1,
+                JobState::Downloading => 0,
+                _ => 2,
+            },
+            percent: if job.total.is_some() || job.state == JobState::Finished {
+                format!("{}%", (fraction * 100.0).floor())
+            } else {
+                String::new()
+            }
+            .into(),
+            speed: format::speed(job.speed).into(),
+            eta: job.eta().map(format::duration).unwrap_or_default().into(),
+            status: status.into(),
+            status_kind: kind,
+            selected,
+            tag: tag.into(),
+            has_icon: icon.is_some(),
+            icon: icon.unwrap_or_default(),
+            package: job.spec.package.clone().unwrap_or_default().into(),
+            added: format::date(job.spec.added).into(),
+            downloaded: if job.downloaded > 0 { format::bytes(job.downloaded) } else { String::new() }.into(),
+            conns: if job.connections > 0 { job.connections.to_string() } else { String::new() }.into(),
+            priority: job.spec.priority,
+            is_archive: bd_core::packages::is_first_volume(&job.name),
+            has_limit: job.spec.rate_limit > 0,
         }
-        .into(),
-        speed: format::speed(job.speed).into(),
-        eta: job.eta().map(format::duration).unwrap_or_default().into(),
-        status: status.into(),
-        status_kind: kind,
-        selected,
-        tag: tag.into(),
     }
+}
+
+/// Domain whose favicon represents the link (the hoster's main domain).
+pub fn favicon_host(url: &Url) -> String {
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    bd_core::hosters::HOSTERS
+        .iter()
+        .find(|(_, domains, _)| domains.iter().any(|d| host == *d || host.ends_with(&format!(".{d}"))))
+        .map(|(_, domains, _)| domains[0].to_owned())
+        .unwrap_or_else(|| host.trim_start_matches("www.").to_owned())
 }
 
 fn short_error(error: &str) -> String {

@@ -1,0 +1,214 @@
+// Extraction screen: archive queue, password list and options.
+
+import { Switch, TextEdit, ScrollView } from "std-widgets.slint";
+import { Theme, Icons, Icon } from "theme.slint";
+import { Btn, Pill, HLine, Dot } from "widgets.slint";
+
+export struct ExtractRow {
+    archive: string,
+    package: string,
+    format: string,
+    status: string,
+    // 0 waiting, 1 running, 2 done, 3 failed
+    kind: int,
+}
+
+export global ExtractionState {
+    in property <[ExtractRow]> jobs;
+    in-out property <string> passwords;
+    in-out property <bool> auto;
+    in-out property <bool> delete-after;
+    in-out property <bool> try-passwords;
+
+    callback passwords-changed(string);
+    callback flag-changed(string, bool);
+    callback clear-finished();
+    callback open-folder(int);
+}
+
+component Card inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.ln;
+    background: Theme.win;
+    clip: true;
+    VerticalLayout {
+        Rectangle {
+            height: 42px;
+            HLine { y: parent.height - 1px; }
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 10px;
+                spacing: 8px;
+                Text { text: root.title; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                Text { text: root.subtitle; font-size: 12.5px; color: Theme.mut; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            }
+        }
+        @children
+    }
+}
+
+component OptionLine inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    min-height: 52px;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: root.title; font-weight: 500; color: Theme.ink; wrap: word-wrap; }
+            if root.hint != "": Text { text: root.hint; font-size: 12.5px; color: Theme.mut; wrap: word-wrap; }
+        }
+        VerticalLayout { alignment: center; Switch { checked <=> root.checked; toggled => { root.toggled(self.checked); } } }
+    }
+}
+
+export component ExtractionPage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: 24px;
+            padding-top: 18px;
+            spacing: 12px;
+            alignment: start;
+
+            Text { text: @tr("Extraction"); font-size: 22px; font-weight: 600; color: Theme.ink; }
+            Text {
+                text: @tr("Finished packages are unpacked automatically: RAR (v4, v5, multi-part), ZIP and 7z. Passwords are tried from the package, then from your list.");
+                color: Theme.mut;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: stretch;
+
+                Card {
+                    horizontal-stretch: 16;
+                    title: @tr("Archive queue");
+                    subtitle: "";
+                    VerticalLayout {
+                        Rectangle {
+                            height: 32px;
+                            background: Theme.chr;
+                            HLine { y: parent.height - 1px; }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 10px;
+                                Text { text: @tr("Archive"); horizontal-stretch: 1; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                                Text { text: @tr("Format"); width: 60px; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                                Text { text: @tr("Status"); width: 220px; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                                Rectangle { width: 30px; }
+                            }
+                        }
+                        if ExtractionState.jobs.length == 0: Text {
+                            text: @tr("Nothing extracted yet. Archives appear here when their package finishes.");
+                            color: Theme.mut;
+                            height: 70px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        for job[i] in ExtractionState.jobs: Rectangle {
+                            height: 40px;
+                            HLine { y: parent.height - 1px; }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 10px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    Text { text: job.archive; color: Theme.ink; overflow: elide; }
+                                    Text { text: job.package; font-size: 11.5px; color: Theme.mut; overflow: elide; }
+                                }
+                                VerticalLayout { alignment: center; width: 60px; Pill { text: job.format; tone: Theme.acc; } }
+                                HorizontalLayout {
+                                    width: 220px;
+                                    spacing: 6px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Dot { background: job.kind == 2 ? Theme.ok : job.kind == 3 ? Theme.er : job.kind == 1 ? Theme.acc : Theme.mut; }
+                                    }
+                                    Text {
+                                        text: job.status;
+                                        font-size: 13px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                        color: job.kind == 2 ? Theme.ok : job.kind == 3 ? Theme.er : job.kind == 1 ? Theme.acc : Theme.mut;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    width: 30px;
+                                    Rectangle {
+                                        width: 28px;
+                                        height: 28px;
+                                        border-radius: 6px;
+                                        background: ta.has-hover ? Theme.trk : transparent;
+                                        ta := TouchArea { mouse-cursor: pointer; clicked => { ExtractionState.open-folder(i); } }
+                                        Icon { width: 16px; height: 16px; commands: Icons.folder; }
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            padding: 10px;
+                            alignment: end;
+                            Btn { small: true; text: @tr("Clear finished"); clicked => { ExtractionState.clear-finished(); } }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 10;
+                    spacing: 12px;
+                    Card {
+                        title: @tr("Password list");
+                        subtitle: @tr("one per line, tried in order");
+                        VerticalLayout {
+                            padding: 12px;
+                            TextEdit {
+                                height: 160px;
+                                text <=> ExtractionState.passwords;
+                                edited(t) => { ExtractionState.passwords-changed(t); }
+                            }
+                        }
+                    }
+                    Card {
+                        title: @tr("Options");
+                        subtitle: "";
+                        VerticalLayout {
+                            OptionLine {
+                                title: @tr("Extract archives automatically");
+                                checked <=> ExtractionState.auto;
+                                toggled(on) => { ExtractionState.flag-changed("auto", on); }
+                            }
+                            HLine {}
+                            OptionLine {
+                                title: @tr("Delete archives after success");
+                                hint: @tr("Only when every archive of the package extracted fine.");
+                                checked <=> ExtractionState.delete-after;
+                                toggled(on) => { ExtractionState.flag-changed("delete", on); }
+                            }
+                            HLine {}
+                            OptionLine {
+                                title: @tr("Try passwords from the list");
+                                checked <=> ExtractionState.try-passwords;
+                                toggled(on) => { ExtractionState.flag-changed("passwords", on); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -80,8 +80,15 @@ async fn runs_the_queue_with_a_parallel_limit_and_pause() {
     let data = Arc::new((0..600_000u32).map(|i| (i * 7 % 251) as u8).collect::<Vec<u8>>());
     let base = server(data.clone(), Duration::from_millis(2)).await;
     let dir = temp_dir("queue");
-    let config =
-        ManagerConfig { dest_dir: dir.clone(), max_parallel: 2, connections: 4, multi_connection: true, resume: true };
+    let config = ManagerConfig {
+        dest_dir: dir.clone(),
+        max_parallel: 2,
+        connections: 4,
+        multi_connection: true,
+        resume: true,
+        if_exists: bd_net::IfExists::Rename,
+        preallocate: true,
+    };
     let manager =
         DownloadManager::new(Engine::new().unwrap().min_segment(64 * 1024), config, tokio::runtime::Handle::current());
 

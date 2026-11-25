@@ -20,7 +20,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 directories = "6"
 futures-util = "0.3"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "http2", "charset", "json", "query", "form"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "http2", "charset", "json", "query", "form", "cookies"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 slint = "1"

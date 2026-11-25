@@ -59,3 +59,62 @@ pub fn notify(title: &str, body: &str) {
         }
     });
 }
+
+/// Adds or removes BDownloader from the programs started with Windows
+/// (current user only). It starts hidden in the tray.
+pub fn set_launch_with_windows(on: bool) {
+    const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    let result = if on {
+        let Ok(exe) = std::env::current_exe() else { return };
+        Command::new("reg")
+            .args([
+                "add",
+                KEY,
+                "/v",
+                "BDownloader",
+                "/t",
+                "REG_SZ",
+                "/f",
+                "/d",
+                &format!("\"{}\" --minimized", exe.display()),
+            ])
+            .output()
+    } else {
+        Command::new("reg").args(["delete", KEY, "/v", "BDownloader", "/f"]).output()
+    };
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "cannot change the startup entry");
+    }
+}
+
+/// Opens a web page in the default browser.
+pub fn open_url(url: &str) {
+    if let Err(e) = Command::new("explorer.exe").arg(url).spawn() {
+        tracing::warn!(error = %e, "cannot open the browser");
+    }
+}
+
+/// Puts the computer to sleep (used when the queue is finished).
+pub fn sleep_computer() {
+    let _ = Command::new("rundll32.exe").args(["powrprof.dll,SetSuspendState", "0,1,0"]).spawn();
+}
+
+/// Shuts the computer down in one minute, so it can still be cancelled with
+/// `shutdown /a`.
+pub fn shutdown_computer() {
+    let _ = Command::new("shutdown").args(["/s", "/t", "60", "/c", "BDownloader: all downloads are finished"]).spawn();
+}
+
+/// Runs a helper program without a console window, in the background.
+pub fn run_hidden(program: &Path, args: &[&str]) {
+    let mut cmd = Command::new(program);
+    cmd.args(args).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    if let Err(e) = cmd.spawn() {
+        tracing::debug!(error = %e, program = %program.display(), "cannot run helper");
+    }
+}

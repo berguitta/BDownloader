@@ -45,6 +45,18 @@ pub struct JobSpec {
     pub password: Option<String>,
     #[serde(default = "default_kind")]
     pub kind: JobKind,
+    /// Connections for this file instead of the global setting.
+    #[serde(default)]
+    pub connections: Option<usize>,
+    /// Speed limit for this file in bytes per second, 0 for none.
+    #[serde(default)]
+    pub rate_limit: u64,
+    /// When it was added, in seconds since 1970.
+    #[serde(default)]
+    pub added: u64,
+    /// Higher starts first: -2 lowest … 2 highest.
+    #[serde(default)]
+    pub priority: i32,
 }
 
 fn default_kind() -> JobKind {
@@ -53,7 +65,18 @@ fn default_kind() -> JobKind {
 
 impl JobSpec {
     pub fn http(url: Url, dest_dir: impl Into<PathBuf>) -> Self {
-        JobSpec { url, name: None, dest_dir: dest_dir.into(), package: None, password: None, kind: JobKind::Http }
+        JobSpec {
+            url,
+            name: None,
+            dest_dir: dest_dir.into(),
+            package: None,
+            password: None,
+            kind: JobKind::Http,
+            connections: None,
+            rate_limit: 0,
+            added: now_secs(),
+            priority: 0,
+        }
     }
 }
 
@@ -145,6 +168,8 @@ pub struct ManagerConfig {
     pub multi_connection: bool,
     /// `resume` module.
     pub resume: bool,
+    pub if_exists: bd_net::IfExists,
+    pub preallocate: bool,
 }
 
 struct Job {
@@ -164,6 +189,8 @@ struct Job {
     last_sample: Option<(Instant, u64)>,
     path: Option<PathBuf>,
     resumed: bool,
+    /// Start even when all parallel slots are taken.
+    force: bool,
 }
 
 impl Job {
@@ -184,6 +211,7 @@ impl Job {
             last_sample: None,
             path: None,
             resumed: false,
+            force: false,
         }
     }
 
@@ -490,6 +518,155 @@ impl DownloadManager {
         }
     }
 
+    fn with_job<T>(&self, id: JobId, f: impl FnOnce(&mut Job) -> T) -> Option<T> {
+        let mut inner = self.lock();
+        inner.revision += 1;
+        inner.jobs.iter_mut().find(|j| j.id == id).map(f)
+    }
+
+    pub fn set_priority(&self, id: JobId, priority: i32) {
+        self.with_job(id, |j| j.spec.priority = priority.clamp(-2, 2));
+        self.schedule();
+    }
+
+    /// Moves a job in the list (the list order is the start order for jobs
+    /// of the same priority).
+    pub fn move_job(&self, id: JobId, to: Move) {
+        let mut inner = self.lock();
+        let Some(pos) = inner.jobs.iter().position(|j| j.id == id) else { return };
+        let last = inner.jobs.len() - 1;
+        let target = match to {
+            Move::Top => 0,
+            Move::Up => pos.saturating_sub(1),
+            Move::Down => (pos + 1).min(last),
+            Move::Bottom => last,
+        };
+        let job = inner.jobs.remove(pos);
+        inner.jobs.insert(target, job);
+        inner.revision += 1;
+    }
+
+    /// Starts now, even when every parallel slot is taken.
+    pub fn force_start(&self, id: JobId) {
+        self.with_job(id, |j| {
+            if matches!(j.state, JobState::Queued | JobState::Paused | JobState::Failed(_)) {
+                j.state = JobState::Queued;
+                j.force = true;
+            }
+        });
+        self.schedule();
+    }
+
+    /// Speed limit for one file in bytes per second (0 removes it). Applies
+    /// immediately to a running download.
+    pub fn set_job_limit(&self, id: JobId, bytes_per_sec: u64) {
+        self.with_job(id, |j| {
+            j.spec.rate_limit = bytes_per_sec;
+            if let Some(slot) = &j.slot {
+                slot.set_speed_limit(bytes_per_sec);
+            }
+        });
+    }
+
+    /// Connections for one file, used from its next start.
+    pub fn set_job_connections(&self, id: JobId, connections: usize) {
+        self.with_job(id, |j| j.spec.connections = Some(connections.clamp(1, 32)));
+    }
+
+    /// Renames a job. Before it starts the new name is used for the file;
+    /// once finished the file itself is renamed.
+    pub fn rename(&self, id: JobId, new_name: &str) -> Result<(), String> {
+        let name = bd_net::sanitize_file_name(new_name.trim());
+        self.with_job(id, |j| match j.state {
+            JobState::Downloading => Err("pause the download before renaming it".to_owned()),
+            JobState::Finished => {
+                let Some(old) = j.path.clone() else { return Err("no file".to_owned()) };
+                let new = old.with_file_name(&name);
+                std::fs::rename(&old, &new).map_err(|e| e.to_string())?;
+                j.path = Some(new);
+                j.name = Some(name.clone());
+                Ok(())
+            }
+            _ => {
+                if j.downloaded > 0 {
+                    // Move the partial files so the download keeps its progress.
+                    if let Some(old) = j.name.clone() {
+                        for suffix in [".part", ".part.json"] {
+                            let _ = std::fs::rename(
+                                j.spec.dest_dir.join(format!("{old}{suffix}")),
+                                j.spec.dest_dir.join(format!("{name}{suffix}")),
+                            );
+                        }
+                    }
+                }
+                j.spec.name = Some(name.clone());
+                j.name = Some(name.clone());
+                Ok(())
+            }
+        })
+        .unwrap_or_else(|| Err("unknown download".to_owned()))
+    }
+
+    /// Changes the folder of a job, moving its files when it has some.
+    pub fn change_folder(&self, id: JobId, dir: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        self.with_job(id, |j| match j.state {
+            JobState::Downloading => Err("pause the download before moving it".to_owned()),
+            JobState::Finished => {
+                let Some(old) = j.path.clone() else { return Err("no file".to_owned()) };
+                let new = dir.join(old.file_name().unwrap_or_default());
+                move_file(&old, &new)?;
+                j.path = Some(new);
+                j.spec.dest_dir = dir.to_path_buf();
+                Ok(())
+            }
+            _ => {
+                if let Some(name) = j.name.clone() {
+                    for suffix in [".part", ".part.json"] {
+                        let from = j.spec.dest_dir.join(format!("{name}{suffix}"));
+                        if from.exists() {
+                            move_file(&from, &dir.join(format!("{name}{suffix}")))?;
+                        }
+                    }
+                }
+                j.spec.dest_dir = dir.to_path_buf();
+                Ok(())
+            }
+        })
+        .unwrap_or_else(|| Err("unknown download".to_owned()))
+    }
+
+    /// Stops a job and throws its partial data away. With `start`, it starts
+    /// again from zero; otherwise it stays paused.
+    pub fn reset(&self, id: JobId, start: bool) {
+        let cleanup = self.with_job(id, |j| {
+            if let Some(slot) = j.slot.take() {
+                slot.cancel();
+            }
+            j.generation += 1;
+            let files = (j.spec.dest_dir.clone(), j.name.clone(), j.waiter.take());
+            j.state = if start { JobState::Queued } else { JobState::Paused };
+            j.downloaded = 0;
+            j.total = None;
+            j.segments.clear();
+            j.speed = 0.0;
+            j.path = None;
+            files
+        });
+        if let Some((dir, name, waiter)) = cleanup {
+            let manager = self.clone();
+            self.runtime.spawn(async move {
+                if let Some(waiter) = waiter {
+                    let _ = tokio::time::timeout(Duration::from_secs(5), waiter).await;
+                }
+                delete_job_files(&dir, name.as_deref(), None).await;
+                if start {
+                    manager.schedule();
+                }
+            });
+        }
+    }
+
     /// Starts queued jobs while there are free slots.
     fn schedule(&self) {
         let mut inner = self.lock();
@@ -498,14 +675,17 @@ impl DownloadManager {
         let config = inner.config.clone();
         let video = inner.video.clone();
         let resolver = inner.resolver.clone();
-        for job in inner.jobs.iter_mut() {
-            if free == 0 {
-                break;
-            }
-            if job.state != JobState::Queued {
+        // Forced jobs first, then by priority, then in list order.
+        let mut order: Vec<usize> =
+            (0..inner.jobs.len()).filter(|&i| inner.jobs[i].state == JobState::Queued).collect();
+        order.sort_by_key(|&i| (!inner.jobs[i].force, -inner.jobs[i].spec.priority, i));
+        for index in order {
+            let job = &mut inner.jobs[index];
+            if free == 0 && !job.force {
                 continue;
             }
-            free -= 1;
+            free = free.saturating_sub(1);
+            job.force = false;
             let slot = Arc::new(ControlSlot::default());
             let future = match &job.spec.kind {
                 JobKind::Http => {
@@ -609,15 +789,19 @@ fn run_http(
 ) -> futures_util::future::BoxFuture<'static, RunResult> {
     Box::pin(async move {
         slot.set_status(Some("Resolving link…"));
-        let resolved = resolver.resolve(&spec.url).await.map_err(RunError::Failed)?;
+        let resolved = resolver.resolve(&spec.url, slot.clone()).await.map_err(RunError::Failed)?;
         slot.set_status(None);
         if slot.is_cancelled() {
             return Err(RunError::Cancelled);
         }
+        let connections = spec.connections.unwrap_or(config.connections);
         let mut request = DownloadRequest::new(resolved.url, spec.dest_dir.clone())
-            .connections(if config.multi_connection { config.connections } else { 1 })
+            .connections(if config.multi_connection { connections } else { 1 })
             .resume(config.resume);
         request.headers = resolved.headers;
+        request.rate_limit = spec.rate_limit;
+        request.if_exists = config.if_exists;
+        request.preallocate = config.preallocate;
         if let Some(name) = spec.name.clone().or(resolved.file_name) {
             request = request.file_name(name);
         }
@@ -636,6 +820,28 @@ async fn delete_job_files(dir: &Path, name: Option<&str>, path: Option<&Path>) {
             let _ = tokio::fs::remove_file(dir.join(format!("{name}{suffix}"))).await;
         }
     }
+}
+
+/// Where to move a job in the list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Move {
+    Top,
+    Up,
+    Down,
+    Bottom,
+}
+
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Renames, or copies then deletes when the target is on another drive.
+fn move_file(from: &Path, to: &Path) -> Result<(), String> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(from, to).map_err(|e| e.to_string())?;
+    std::fs::remove_file(from).map_err(|e| e.to_string())
 }
 
 /// Reads a saved queue. A missing or broken file gives an empty queue.

@@ -70,6 +70,7 @@ pub struct Grabber {
     engine: Engine,
     runtime: Handle,
     video: Arc<Mutex<Option<VideoBackend>>>,
+    page_scan: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Grabber {
@@ -79,6 +80,7 @@ impl Grabber {
             engine,
             runtime,
             video: Arc::default(),
+            page_scan: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -88,6 +90,11 @@ impl Grabber {
 
     pub fn set_video_backend(&self, backend: Option<VideoBackend>) {
         *self.video.lock().unwrap_or_else(|e| e.into_inner()) = backend;
+    }
+
+    /// `page-scan` module: web page links become pools of file links.
+    pub fn set_page_scan(&self, on: bool) {
+        self.page_scan.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn revision(&self) -> u64 {
@@ -160,17 +167,24 @@ impl Grabber {
         }
 
         if hoster_of(&url).is_some() {
-            // Hoster pages answer with HTML: the real file is only known
-            // after resolving with an account.
-            self.apply(id, Update::Unchecked);
+            // Hoster pages answer with HTML: read name and size from the
+            // hoster's check API or its page.
+            let update = match crate::hosters::check_link(&url).await {
+                crate::hosters::LinkCheck::Online { name, size } => Update::Online { name, size },
+                crate::hosters::LinkCheck::Offline(why) => Update::Offline(why),
+                crate::hosters::LinkCheck::Unknown => Update::Unchecked,
+            };
+            self.apply(id, update);
             return;
         }
 
         match self.engine.probe(&url).await {
             Ok(remote) => {
                 let is_page = remote.content_type.as_deref().is_some_and(|t| t.starts_with("text/html"));
-                if is_page {
+                if is_page && self.page_scan.load(std::sync::atomic::Ordering::Relaxed) {
                     self.scan_page(id, &remote.url).await;
+                } else if is_page {
+                    self.apply(id, Update::Offline("web page, not a file (turn on Web page scan)".into()));
                 } else {
                     self.apply(id, Update::Online { name: remote.file_name, size: remote.size });
                 }
@@ -334,7 +348,7 @@ impl Grabber {
 
     /// Takes the selected links out of the grabber as jobs. Packages with
     /// several files get their own sub-folder of `root`.
-    pub fn take_selected(&self, root: &Path) -> Vec<JobSpec> {
+    pub fn take_selected(&self, root: &Path, folder_per_package: bool) -> Vec<JobSpec> {
         let mut inner = self.lock();
         let counts = |package: &str, links: &[GrabbedLink]| links.iter().filter(|l| l.package == package).count();
         let mut specs = Vec::new();
@@ -343,7 +357,7 @@ impl Grabber {
             if !link.selected || matches!(link.status, LinkStatus::Offline(_) | LinkStatus::Checking) {
                 continue;
             }
-            let dir: PathBuf = if counts(&link.package, &inner.links) > 1 {
+            let dir: PathBuf = if folder_per_package && counts(&link.package, &inner.links) > 1 {
                 root.join(sanitize_file_name(&link.package))
             } else {
                 root.to_path_buf()
@@ -353,12 +367,10 @@ impl Grabber {
                 None => JobKind::Http,
             };
             specs.push(JobSpec {
-                url: link.url.clone(),
-                name: None,
-                dest_dir: dir,
                 package: Some(link.package.clone()),
                 password: inner.passwords.iter().find(|(p, _)| p == &link.package).map(|(_, pw)| pw.clone()),
                 kind,
+                ..JobSpec::http(link.url.clone(), dir)
             });
             taken.push(link.id);
         }
@@ -477,7 +489,7 @@ mod tests {
             inner.links[3].selected = false;
         }
         grabber.set_package_password("Movie", "secret");
-        let specs = grabber.take_selected(Path::new("D:/dl"));
+        let specs = grabber.take_selected(Path::new("D:/dl"), true);
         assert_eq!(specs.len(), 3);
         assert_eq!(specs[0].dest_dir, Path::new("D:/dl").join("Movie"));
         assert_eq!(specs[0].password.as_deref(), Some("secret"));

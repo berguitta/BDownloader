@@ -3,9 +3,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod favicon;
 mod format;
+mod frame;
 mod i18n;
 mod platform;
+mod schema;
+mod settings_view;
 #[cfg(feature = "snapshot")]
 mod snapshot;
 mod tray;
@@ -67,7 +71,7 @@ fn main() -> Result<()> {
     let (sender, messages) = std::sync::mpsc::channel();
     let queue_path = Settings::queue_path();
     let tray = if modules.is_enabled("tray") {
-        match Tray::new(modules.is_enabled("clipboard"), settings.speed_limit_kib) {
+        match Tray::new(modules.is_enabled("clipboard")) {
             Ok(tray) => Some(tray),
             Err(e) => {
                 tracing::warn!(error = %e, "cannot create the tray icon");
@@ -112,6 +116,11 @@ fn main() -> Result<()> {
         clicknload_status: String::new(),
         tool_slot: None,
         quitting: false,
+        favicons: Default::default(),
+        extract_jobs: Vec::new(),
+        extract_revision: 1,
+        input_action: None,
+        was_busy: false,
     }));
     {
         let mut a = app.borrow_mut();
@@ -125,6 +134,24 @@ fn main() -> Result<()> {
 
     wiring::init_ui(&ui, &app);
     wiring::wire_all(&ui, &app);
+
+    // Captchas in free mode: hand the page to the user's browser.
+    {
+        let a = app.borrow();
+        let open_browser = a.settings.text("captcha-mode", "browser") == "browser";
+        a.resolver.set_captcha_handler(std::sync::Arc::new(move |page, hoster| {
+            if open_browser {
+                platform::open_url(page.as_str());
+            }
+            platform::notify(&format!("{hoster}: captcha"), page.as_str());
+        }));
+        if a.settings.flag("update-yt-dlp", true) {
+            if let Some(path) = bd_core::tools::find(bd_core::tools::Tool::YtDlp) {
+                platform::run_hidden(&path, &["-U"]);
+            }
+        }
+    }
+    let start_hidden = std::env::args().any(|a| a == "--minimized") && app.borrow().tray.is_some();
 
     #[cfg(feature = "snapshot")]
     if let Some(snapshot) = &snapshot {
@@ -160,6 +187,7 @@ fn main() -> Result<()> {
             for action in actions {
                 handle_tray(&mut a, &ui, action);
             }
+            ui.set_is_max(ui.window().is_maximized());
             if a.settings.minimize_to_tray && a.tray.is_some() && ui.window().is_minimized() {
                 ui.window().set_minimized(false);
                 let _ = ui.hide();
@@ -169,7 +197,9 @@ fn main() -> Result<()> {
     }
     app.borrow_mut().refresh(&ui);
 
-    ui.show()?;
+    if !start_hidden {
+        ui.show()?;
+    }
     slint::run_event_loop_until_quit()?;
 
     // Save progress of running downloads so they resume next time.
@@ -198,17 +228,10 @@ fn handle_tray(app: &mut App, ui: &AppWindow, action: TrayAction) {
         TrayAction::ToggleClipboard(on) => wiring::set_module(app, ui, "clipboard", on),
         TrayAction::PauseAll => app.manager.pause_all(),
         TrayAction::ResumeAll => app.manager.resume_all(),
-        TrayAction::SpeedLimit(kib) => {
-            app.settings.speed_limit_kib = kib;
-            if kib > 0 && !app.modules.is_enabled("speed-limit") {
-                let _ = app.modules.set_enabled("speed-limit", true);
-            }
-            if let Some(tray) = &app.tray {
-                tray.set_speed(kib);
-            }
-            ui.global::<SettingsState>().set_speed_limit_kib(kib as i32);
-            app.apply_config();
-            app.save_settings();
+        TrayAction::SpeedLimit => {
+            let _ = ui.show();
+            ui.window().set_minimized(false);
+            ui.invoke_show_speed_popup();
         }
         TrayAction::Quit => {
             app.quitting = true;
@@ -219,6 +242,15 @@ fn handle_tray(app: &mut App, ui: &AppWindow, action: TrayAction) {
 
 #[cfg(feature = "snapshot")]
 fn apply_snapshot_options(ui: &AppWindow, app: &Rc<RefCell<App>>, snapshot: &snapshot::Snapshot) {
+    ui.set_custom_frame(false);
+    if let Ok(cat) = std::env::var("BD_SNAPSHOT_CATEGORY") {
+        ui.global::<SettingsState>().set_category(cat.parse().unwrap_or(0));
+        settings_view::refresh(&app.borrow(), ui);
+    }
+    if let Ok(search) = std::env::var("BD_SNAPSHOT_SEARCH") {
+        ui.global::<SettingsState>().set_search(search.into());
+        settings_view::refresh(&app.borrow(), ui);
+    }
     if let Some(theme) = snapshot.theme {
         ui.global::<SettingsState>().set_theme_mode(theme);
     }
@@ -241,7 +273,8 @@ fn apply_snapshot_options(ui: &AppWindow, app: &Rc<RefCell<App>>, snapshot: &sna
     if let Ok(lang) = std::env::var("BD_SNAPSHOT_LANG") {
         let index = i18n::index_of(&lang);
         i18n::select(index);
-        ui.global::<SettingsState>().set_language_index(index as i32);
+        app.borrow_mut().settings.language = lang.clone();
+        settings_view::refresh(&app.borrow(), ui);
     }
     if std::env::var("BD_SNAPSHOT_START").is_ok() {
         let (weak, a) = (ui.as_weak(), app.clone());

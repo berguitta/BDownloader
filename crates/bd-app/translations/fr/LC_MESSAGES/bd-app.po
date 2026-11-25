@@ -350,3 +350,190 @@ msgstr "TÉLÉCHARGEMENTS"
 
 msgid "{} files · {} online"
 msgstr "{} fichiers · {} en ligne"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Any value, for all downloads together."
+msgstr "N'importe quelle valeur, pour tous les téléchargements ensemble."
+
+msgid "e.g. 2.5"
+msgstr "ex. 2,5"
+
+msgid "Apply"
+msgstr "Appliquer"
+
+msgid "Unlimited"
+msgstr "Illimitée"
+
+msgid "Resume all"
+msgstr "Tout reprendre"
+
+msgid "Downloaded"
+msgstr "Téléchargé"
+
+msgid "Package"
+msgstr "Paquet"
+
+msgid "Connections"
+msgstr "Connexions"
+
+msgid "Added"
+msgstr "Ajouté"
+
+msgid "Reset columns"
+msgstr "Colonnes par défaut"
+
+msgid "Start"
+msgstr "Lancer"
+
+msgid "Force start"
+msgstr "Forcer le lancement"
+
+msgid "Stop and reset"
+msgstr "Arrêter et réinitialiser"
+
+msgid "Restart from zero"
+msgstr "Recommencer depuis zéro"
+
+msgid "Priority"
+msgstr "Priorité"
+
+msgid "Highest"
+msgstr "Maximale"
+
+msgid "High"
+msgstr "Haute"
+
+msgid "Normal"
+msgstr "Normale"
+
+msgid "Low"
+msgstr "Basse"
+
+msgid "Lowest"
+msgstr "Minimale"
+
+msgid "Move"
+msgstr "Déplacer"
+
+msgid "To the top"
+msgstr "Tout en haut"
+
+msgid "Move up"
+msgstr "Monter"
+
+msgid "Move down"
+msgstr "Descendre"
+
+msgid "To the bottom"
+msgstr "Tout en bas"
+
+msgid "Speed limit for this file…"
+msgstr "Limite de débit pour ce fichier…"
+
+msgid "Remove speed limit"
+msgstr "Retirer la limite de débit"
+
+msgid "Extract now"
+msgstr "Extraire maintenant"
+
+msgid "Copy"
+msgstr "Copier"
+
+msgid "Link"
+msgstr "Lien"
+
+msgid "File name"
+msgstr "Nom du fichier"
+
+msgid "File path"
+msgstr "Chemin du fichier"
+
+msgid "Rename…"
+msgstr "Renommer…"
+
+msgid "Change folder…"
+msgstr "Changer de dossier…"
+
+msgid "Properties"
+msgstr "Propriétés"
+
+msgid "Remove all finished"
+msgstr "Retirer tous les terminés"
+
+msgid "Remove finished"
+msgstr "Retirer les terminés"
+
+msgid "Conn."
+msgstr "Conn."
+
+msgid "Choose columns (right-click)"
+msgstr "Choisir les colonnes (clic droit)"
+
+msgid "Finished packages are unpacked automatically: RAR (v4, v5, multi-part), ZIP and 7z. Passwords are tried from the package, then from your list."
+msgstr "Les paquets terminés sont décompressés automatiquement : RAR (v4, v5, multi-parties), ZIP et 7z. Le mot de passe du paquet est essayé, puis ceux de votre liste."
+
+msgid "Archive queue"
+msgstr "File d'archives"
+
+msgid "Archive"
+msgstr "Archive"
+
+msgid "Format"
+msgstr "Format"
+
+msgid "Nothing extracted yet. Archives appear here when their package finishes."
+msgstr "Rien d'extrait pour l'instant. Les archives apparaissent ici quand leur paquet est terminé."
+
+msgid "Clear finished"
+msgstr "Retirer les terminées"
+
+msgid "Password list"
+msgstr "Liste de mots de passe"
+
+msgid "one per line, tried in order"
+msgstr "un par ligne, essayés dans l'ordre"
+
+msgid "Options"
+msgstr "Options"
+
+msgid "Extract archives automatically"
+msgstr "Extraire les archives automatiquement"
+
+msgid "Delete archives after success"
+msgstr "Supprimer les archives après réussite"
+
+msgid "Only when every archive of the package extracted fine."
+msgstr "Seulement quand toutes les archives du paquet ont été extraites sans erreur."
+
+msgid "Try passwords from the list"
+msgstr "Essayer les mots de passe de la liste"
+
+msgid "advanced"
+msgstr "avancé"
+
+msgid "after restart"
+msgstr "après redémarrage"
+
+msgid "Browse…"
+msgstr "Parcourir…"
+
+msgid "Search all settings"
+msgstr "Rechercher dans tous les réglages"
+
+msgid "Show advanced"
+msgstr "Afficher les options avancées"
+
+msgid "Reset this page"
+msgstr "Réinitialiser cette page"
+
+msgid "Copy as JSON"
+msgstr "Copier en JSON"
+
+msgid "No setting matches. Try \"speed\", \"captcha\" or \"folder\"."
+msgstr "Aucun réglage trouvé. Essayez \"débit\", \"captcha\" ou \"dossier\"."
+
+msgid "{} advanced options hidden. Turn on Show advanced to see them."
+msgstr "{} options avancées masquées. Activez « Afficher les options avancées » pour les voir."
+

@@ -38,6 +38,22 @@ pub struct DownloadRequest {
     pub resume: bool,
     /// Extra headers sent with every request (cookies, authorization).
     pub headers: Vec<(String, String)>,
+    /// Speed limit for this file in bytes per second, 0 for none.
+    pub rate_limit: u64,
+    /// What to do when the destination file already exists.
+    pub if_exists: IfExists,
+    /// Reserve the whole file on disk before writing.
+    pub preallocate: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IfExists {
+    /// Save as `name (1).ext`.
+    #[default]
+    Rename,
+    /// Consider the existing file as the result.
+    Skip,
+    Overwrite,
 }
 
 impl DownloadRequest {
@@ -49,6 +65,9 @@ impl DownloadRequest {
             connections: 8,
             resume: true,
             headers: Vec::new(),
+            rate_limit: 0,
+            if_exists: IfExists::Rename,
+            preallocate: true,
         }
     }
 
@@ -104,6 +123,8 @@ struct Inner {
 #[derive(Default)]
 struct Shared {
     inner: Mutex<Inner>,
+    /// Per-download speed limit, changeable while running.
+    rate: RateLimiter,
 }
 
 impl Shared {
@@ -153,6 +174,11 @@ pub struct DownloadControl {
 }
 
 impl DownloadControl {
+    /// Changes the speed limit of this download while it runs (0 = none).
+    pub fn set_speed_limit(&self, bytes_per_sec: u64) {
+        self.shared.rate.set_limit(bytes_per_sec);
+    }
+
     pub fn progress(&self) -> Progress {
         self.shared.snapshot()
     }
@@ -308,6 +334,14 @@ async fn run(
     let dest = request.dest_dir.join(&name);
     let part = state::part_path(&dest);
     let state_file = state::state_path(&dest);
+    shared.rate.set_limit(request.rate_limit);
+
+    if request.if_exists == IfExists::Skip && tokio::fs::metadata(&dest).await.is_ok_and(|m| m.is_file()) {
+        let mut inner = shared.lock();
+        inner.file_name = Some(name.clone());
+        inner.total = remote.size;
+        return Ok(dest);
+    }
 
     let (segments, resumed) = prepare(&engine, &remote, &request, &part, &state_file).await?;
     {
@@ -385,7 +419,10 @@ async fn run(
     }
 
     // Unknown size: whatever the stream gave is the file.
-    let final_path = unique_path(&dest).await;
+    let final_path = match request.if_exists {
+        IfExists::Overwrite => dest.clone(),
+        _ => unique_path(&dest).await,
+    };
     tokio::fs::rename(&part, &final_path).await?;
     let _ = tokio::fs::remove_file(&state_file).await;
     tracing::info!(path = %final_path.display(), "download finished");
@@ -403,7 +440,7 @@ async fn prepare(
     if let (Some(size), true, true) = (remote.size, remote.ranges, request.resume) {
         if let Some(saved) = state::load(state_file).await {
             let same_file = saved.size == Some(size) && validators_match(&saved, remote);
-            let part_ok = tokio::fs::metadata(part).await.map(|m| m.len() == size).unwrap_or(false);
+            let part_ok = tokio::fs::metadata(part).await.map(|m| m.len() <= size).unwrap_or(false);
             if same_file && part_ok && !saved.segments.is_empty() {
                 tracing::info!(file = %part.display(), "resuming previous download");
                 return Ok((saved.segments, true));
@@ -414,7 +451,9 @@ async fn prepare(
     let file = tokio::fs::File::create(part).await?;
     let segments = match (remote.size, remote.ranges) {
         (Some(size), true) => {
-            file.set_len(size).await?;
+            if request.preallocate {
+                file.set_len(size).await?;
+            }
             state::plan(size, request.connections, engine.min_segment)
         }
         (Some(0), false) => Vec::new(),
@@ -599,7 +638,7 @@ async fn fetch_segment(
                 shared.lock().segments[idx].done += data.len() as u64;
                 return Err(Error::Cancelled);
             }
-            _ = engine.rate.acquire(data.len()) => {}
+            _ = async { engine.rate.acquire(data.len()).await; shared.rate.acquire(data.len()).await } => {}
         }
         let complete = {
             let mut inner = shared.lock();

@@ -47,14 +47,11 @@ impl VideoFormat {
     fn args(&self, ffmpeg: bool) -> Vec<String> {
         let s = |v: &str| v.to_owned();
         match self {
-            VideoFormat::Best if ffmpeg => vec![s("-f"), s("bv*+ba/b"), s("--merge-output-format"), s("mp4")],
+            VideoFormat::Best if ffmpeg => vec![s("-f"), s("bv*+ba/b")],
             VideoFormat::Best => vec![s("-f"), s("b")],
-            VideoFormat::MaxHeight { height } if ffmpeg => vec![
-                s("-f"),
-                format!("bv*[height<={height}]+ba/b[height<={height}]/b"),
-                s("--merge-output-format"),
-                s("mp4"),
-            ],
+            VideoFormat::MaxHeight { height } if ffmpeg => {
+                vec![s("-f"), format!("bv*[height<={height}]+ba/b[height<={height}]/b")]
+            }
             VideoFormat::MaxHeight { height } => vec![s("-f"), format!("b[height<={height}]/b")],
             VideoFormat::AudioBest => vec![s("-f"), s("ba[ext=m4a]/ba")],
             VideoFormat::AudioMp3 => {
@@ -175,6 +172,24 @@ pub fn parse_info(json: &Value, ffmpeg: bool) -> VideoInfo {
 pub struct VideoBackend {
     pub yt_dlp: PathBuf,
     pub ffmpeg: Option<PathBuf>,
+    pub options: VideoOptions,
+}
+
+/// User preferences for video downloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VideoOptions {
+    /// mp4, mkv or webm, when streams are merged.
+    pub container: String,
+    /// Subtitle languages ("en,fr"), None for no subtitles.
+    pub subtitles: Option<String>,
+    /// Thumbnail and metadata embedded in the file (needs ffmpeg).
+    pub embed_metadata: bool,
+}
+
+impl Default for VideoOptions {
+    fn default() -> Self {
+        VideoOptions { container: "mp4".to_owned(), subtitles: None, embed_metadata: true }
+    }
 }
 
 fn command(program: &Path) -> Command {
@@ -227,6 +242,19 @@ impl VideoBackend {
                 .args(format.args(backend.ffmpeg.is_some()));
             if let Some(ffmpeg) = &backend.ffmpeg {
                 cmd.arg("--ffmpeg-location").arg(ffmpeg);
+                let audio_only = matches!(format, VideoFormat::AudioBest | VideoFormat::AudioMp3);
+                if !audio_only {
+                    cmd.args(["--merge-output-format", &backend.options.container]);
+                }
+                if backend.options.embed_metadata {
+                    cmd.args(["--embed-metadata", "--embed-thumbnail"]);
+                }
+            }
+            if let Some(langs) = backend.options.subtitles.as_deref().filter(|l| !l.trim().is_empty()) {
+                cmd.args(["--write-subs", "--sub-langs", &langs.replace(' ', "")]);
+                if backend.ffmpeg.is_some() {
+                    cmd.arg("--embed-subs");
+                }
             }
             if rate_limit > 0 {
                 cmd.args(["--limit-rate", &rate_limit.to_string()]);

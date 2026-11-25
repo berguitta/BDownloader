@@ -13,8 +13,11 @@ use bd_core::{JobSnapshot, JobState, ThemeMode};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::app::{App, UiMsg};
-use crate::i18n::{self, t};
-use crate::{platform, AccountsState, AppWindow, DownloadsState, GrabberState, SettingsState};
+use crate::i18n::t;
+use crate::{
+    platform, settings_view, AccountsState, AppWindow, Columns, DownloadsState, ExtractionState, GrabberState,
+    SettingsState,
+};
 
 type Shared = Rc<RefCell<App>>;
 type Action<'a> = &'a dyn Fn(&mut App, &AppWindow);
@@ -37,19 +40,13 @@ pub fn init_ui(ui: &AppWindow, app: &Shared) {
         ThemeMode::Light => 1,
         ThemeMode::Dark => 2,
     });
-    let languages: Vec<SharedString> = i18n::LANGUAGES.iter().map(|(_, name)| SharedString::from(*name)).collect();
-    s.set_languages(ModelRc::new(VecModel::from(languages)));
-    s.set_language_index(i18n::index_of(&app.settings.language) as i32);
-    s.set_download_dir(app.settings.download_dir.display().to_string().into());
-    s.set_parallel(app.settings.max_parallel as i32);
-    s.set_connections(app.settings.connections_per_download as i32);
-    s.set_speed_limit_kib(app.settings.speed_limit_kib.min(i32::MAX as u64) as i32);
-    s.set_start_on_launch(app.settings.start_on_launch);
-    s.set_close_to_tray(app.settings.close_to_tray);
-    s.set_minimize_to_tray(app.settings.minimize_to_tray);
-    s.set_archive_passwords(app.settings.archive_passwords.join("\n").into());
-    s.set_delete_archives(app.settings.delete_archives);
-    s.set_config_path(app.settings_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default().into());
+    ui.set_compact(app.settings.text("density", "comfortable") == "compact");
+    ui.global::<DownloadsState>().set_columns(columns_from(app.settings.text("columns", DEFAULT_COLUMNS)));
+    let e = ui.global::<ExtractionState>();
+    e.set_passwords(app.settings.archive_passwords.join("\n").into());
+    e.set_auto(app.modules.is_enabled("extraction"));
+    e.set_delete_after(app.settings.delete_archives);
+    e.set_try_passwords(app.settings.flag("try-passwords", true));
     ui.global::<DownloadsState>().set_parallel(app.settings.max_parallel as i32);
     ui.global::<GrabberState>().set_auto_start(app.settings.auto_start_grabbed);
 
@@ -76,6 +73,26 @@ pub fn wire_all(ui: &AppWindow, app: &Shared) {
     wire_grabber(ui, app);
     wire_accounts(ui, app);
     wire_settings(ui, app);
+    wire_extraction(ui, app);
+    wire_window(ui, app);
+}
+
+pub const DEFAULT_COLUMNS: &str = "hoster,size,progress,speed,eta,status";
+
+fn columns_from(list: &str) -> Columns {
+    let has = |name: &str| list.split(',').any(|c| c.trim() == name);
+    Columns {
+        hoster: has("hoster"),
+        size: has("size"),
+        progress: has("progress"),
+        speed: has("speed"),
+        eta: has("eta"),
+        status: has("status"),
+        package: has("package"),
+        added: has("added"),
+        downloaded: has("downloaded"),
+        connections: has("connections"),
+    }
 }
 
 fn toggle(app: &App, job: &JobSnapshot) {
@@ -98,7 +115,7 @@ fn wire_downloads(ui: &AppWindow, app: &Shared) {
             app.settings.max_parallel = value.clamp(1, 50) as usize;
             app.apply_config();
             app.save_settings();
-            ui.global::<SettingsState>().set_parallel(value);
+            crate::settings_view::refresh(app, ui);
         })
     });
 
@@ -171,6 +188,15 @@ fn wire_downloads(ui: &AppWindow, app: &Shared) {
                         app.toast(t("Link copied"));
                     }
                 }
+                "copy-name" => {
+                    app.ignore_clipboard = Some(job.name.clone());
+                    platform::copy_text(&job.name);
+                }
+                "copy-path" => {
+                    let path = job.path.clone().unwrap_or_else(|| job.dest_dir.join(&job.name)).display().to_string();
+                    app.ignore_clipboard = Some(path.clone());
+                    platform::copy_text(&path);
+                }
                 "remove" | "delete" => {
                     app.manager.remove(job.id, action == "delete");
                     if app.selected == Some(job.id) {
@@ -178,9 +204,104 @@ fn wire_downloads(ui: &AppWindow, app: &Shared) {
                     }
                     app.toast(format!("− {}", job.name));
                 }
-                other => tracing::debug!(action = other, "unknown row action"),
+                "clear-finished" => app.manager.clear_finished(),
+                "start" => app.manager.resume(job.id),
+                "force-start" => app.manager.force_start(job.id),
+                "pause" => app.manager.pause(job.id),
+                "reset" => app.manager.reset(job.id, false),
+                "restart" => app.manager.reset(job.id, true),
+                "extract" => {
+                    if let Some(path) = job.path.clone() {
+                        let package = job.spec.package.clone().unwrap_or_else(|| job.name.clone());
+                        let files: Vec<PathBuf> = app
+                            .jobs
+                            .iter()
+                            .filter(|j| j.spec.package.is_some() && j.spec.package == job.spec.package)
+                            .filter_map(|j| j.path.clone())
+                            .chain(std::iter::once(path))
+                            .collect();
+                        app.start_extraction(package, job.dest_dir.clone(), files, job.spec.password.clone());
+                        ui.set_page(3);
+                    }
+                }
+                "rename" => {
+                    app.input_action = Some((job.id, "rename".to_owned()));
+                    ui.set_input_title(t("Rename").into());
+                    ui.set_input_hint(job.name.as_str().into());
+                    ui.set_input_value(job.name.as_str().into());
+                    ui.set_input_open(true);
+                }
+                "file-limit" => {
+                    app.input_action = Some((job.id, "file-limit".to_owned()));
+                    ui.set_input_title(t("Speed limit for this file").into());
+                    ui.set_input_hint(t("In MB/s, any value. 0 removes the limit.").into());
+                    let current = job.spec.rate_limit as f64 / 1_048_576.0;
+                    ui.set_input_value(if current > 0.0 { format!("{current:.2}") } else { String::new() }.into());
+                    ui.set_input_open(true);
+                }
+                "file-limit:0" => app.manager.set_job_limit(job.id, 0),
+                "change-folder" => {
+                    if let Some(dir) = rfd::FileDialog::new().set_directory(&job.dest_dir).pick_folder() {
+                        if let Err(e) = app.manager.change_folder(job.id, &dir) {
+                            app.toast(e);
+                        }
+                    }
+                }
+                "properties" => {
+                    app.selected = Some(job.id);
+                }
+                other => {
+                    if let Some(p) = other.strip_prefix("priority:") {
+                        app.manager.set_priority(job.id, p.parse().unwrap_or(0));
+                    } else if let Some(n) = other.strip_prefix("connections:") {
+                        app.manager.set_job_connections(job.id, n.parse().unwrap_or(8));
+                        app.toast(t("Applies at the next start"));
+                    } else if let Some(to) = other.strip_prefix("move:") {
+                        let to = match to {
+                            "top" => bd_core::manager::Move::Top,
+                            "up" => bd_core::manager::Move::Up,
+                            "down" => bd_core::manager::Move::Down,
+                            _ => bd_core::manager::Move::Bottom,
+                        };
+                        app.manager.move_job(job.id, to);
+                    } else {
+                        tracing::debug!(action = other, "unknown row action");
+                    }
+                }
             }
             app.refresh(ui);
+        })
+    });
+
+    let run = with(ui, app);
+    state.on_clear_finished(move || {
+        run(&|app, ui| {
+            app.manager.clear_finished();
+            app.refresh(ui);
+        })
+    });
+
+    let run = with(ui, app);
+    state.on_toggle_column(move |name| {
+        run(&|app, ui| {
+            let mut list: Vec<String> = app
+                .settings
+                .text("columns", DEFAULT_COLUMNS)
+                .split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if name == "reset" {
+                list = DEFAULT_COLUMNS.split(',').map(str::to_owned).collect();
+            } else if let Some(pos) = list.iter().position(|c| *c == *name) {
+                list.remove(pos);
+            } else {
+                list.push(name.to_string());
+            }
+            let joined = list.join(",");
+            ui.global::<DownloadsState>().set_columns(columns_from(&joined));
+            app.settings.set_option("columns", joined);
+            app.save_settings();
         })
     });
 }
@@ -225,7 +346,8 @@ fn wire_grabber(ui: &AppWindow, app: &Shared) {
     let run = with(ui, app);
     g.on_start_selected(move || {
         run(&|app, ui| {
-            let specs = app.grabber.take_selected(&app.settings.download_dir);
+            let specs =
+                app.grabber.take_selected(&app.settings.download_dir, app.settings.flag("folder-per-package", true));
             let count = specs.len();
             for spec in specs {
                 app.manager.add_spec(spec);
@@ -418,6 +540,21 @@ fn wire_settings(ui: &AppWindow, app: &Shared) {
     let s = ui.global::<SettingsState>();
 
     let run = with(ui, app);
+    s.on_category_selected(move |_| run(&|app, ui| settings_view::refresh(app, ui)));
+    let run = with(ui, app);
+    s.on_search_changed(move || run(&|app, ui| settings_view::refresh(app, ui)));
+    let run = with(ui, app);
+    s.on_show_advanced_changed(move |_| run(&|app, ui| settings_view::refresh(app, ui)));
+    let run = with(ui, app);
+    s.on_item_changed(move |id, value| run(&|app, ui| settings_view::changed(app, ui, &id, &value)));
+    let run = with(ui, app);
+    s.on_browse(move |id| run(&|app, ui| settings_view::browse(app, ui, &id)));
+    let run = with(ui, app);
+    s.on_reset_page(move || run(&|app, ui| settings_view::reset_page(app, ui)));
+    let run = with(ui, app);
+    s.on_copy_json(move || run(&|app, _| settings_view::copy_json(app)));
+
+    let run = with(ui, app);
     s.on_theme_changed(move |mode| {
         run(&|app, ui| {
             app.settings.theme = match mode {
@@ -427,83 +564,7 @@ fn wire_settings(ui: &AppWindow, app: &Shared) {
             };
             app.save_settings();
             ui.invoke_apply_theme(mode);
-        })
-    });
-
-    let run = with(ui, app);
-    s.on_language_changed(move |index| {
-        run(&|app, ui| {
-            app.settings.language = i18n::select(index.max(0) as usize).to_owned();
-            app.save_settings();
-            app.refresh_accounts(ui);
-            app.refresh_grabber(ui, true);
-        })
-    });
-
-    let run = with(ui, app);
-    s.on_download_dir_changed(move |dir| {
-        run(&|app, _| {
-            let dir = dir.trim();
-            if dir.is_empty() {
-                return;
-            }
-            app.settings.download_dir = PathBuf::from(dir);
-            app.apply_config();
-            app.save_settings();
-        })
-    });
-
-    let run = with(ui, app);
-    s.on_parallel_changed(move |value| {
-        run(&|app, ui| {
-            app.settings.max_parallel = value.clamp(1, 50) as usize;
-            app.apply_config();
-            app.save_settings();
-            ui.global::<DownloadsState>().set_parallel(value);
-        })
-    });
-
-    let run = with(ui, app);
-    s.on_connections_changed(move |value| {
-        run(&|app, _| {
-            app.settings.connections_per_download = value.clamp(1, 32) as usize;
-            app.apply_config();
-            app.save_settings();
-        })
-    });
-
-    let run = with(ui, app);
-    s.on_speed_limit_changed(move |value| {
-        run(&|app, _| {
-            app.settings.speed_limit_kib = value.max(0) as u64;
-            if let Some(tray) = &app.tray {
-                tray.set_speed(app.settings.speed_limit_kib);
-            }
-            app.apply_config();
-            app.save_settings();
-        })
-    });
-
-    let run = with(ui, app);
-    s.on_flag_changed(move |flag, on| {
-        run(&|app, _| {
-            match flag.as_str() {
-                "start-on-launch" => app.settings.start_on_launch = on,
-                "close-to-tray" => app.settings.close_to_tray = on,
-                "minimize-to-tray" => app.settings.minimize_to_tray = on,
-                "delete-archives" => app.settings.delete_archives = on,
-                _ => {}
-            }
-            app.save_settings();
-        })
-    });
-
-    let run = with(ui, app);
-    s.on_passwords_changed(move |text| {
-        run(&|app, _| {
-            app.settings.archive_passwords =
-                text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
-            app.save_settings();
+            settings_view::refresh(app, ui);
         })
     });
 
@@ -528,7 +589,138 @@ fn wire_settings(ui: &AppWindow, app: &Shared) {
             app.refresh_tool_status(ui);
         })
     });
+}
+
+fn wire_extraction(ui: &AppWindow, app: &Shared) {
+    let e = ui.global::<ExtractionState>();
 
     let run = with(ui, app);
-    s.on_module_toggled(move |id, on| run(&|app, ui| set_module(app, ui, &id, on)));
+    e.on_passwords_changed(move |text| {
+        run(&|app, _| {
+            app.settings.archive_passwords =
+                text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+            app.save_settings();
+        })
+    });
+
+    let run = with(ui, app);
+    e.on_flag_changed(move |flag, on| {
+        run(&|app, ui| {
+            match flag.as_str() {
+                "auto" => set_module(app, ui, "extraction", on),
+                "delete" => app.settings.delete_archives = on,
+                "passwords" => app.settings.set_option("try-passwords", on),
+                _ => {}
+            }
+            app.save_settings();
+        })
+    });
+
+    let run = with(ui, app);
+    e.on_clear_finished(move || {
+        run(&|app, ui| {
+            app.extract_jobs.retain(|j| j.outcome.is_none());
+            app.refresh_extraction(ui, true);
+        })
+    });
+
+    let run = with(ui, app);
+    e.on_open_folder(move |row| {
+        run(&|app, _| {
+            // Rows are shown newest first.
+            let index = app.extract_jobs.len().checked_sub(1 + row.max(0) as usize);
+            if let Some(job) = index.and_then(|i| app.extract_jobs.get(i)) {
+                platform::reveal(&job.dir);
+            }
+        })
+    });
+}
+
+/// Frameless window: drag, resize, minimize, maximize, close, speed box.
+fn wire_window(ui: &AppWindow, app: &Shared) {
+    let weak = ui.as_weak();
+    ui.on_window_drag(move || {
+        if let Some(ui) = weak.upgrade() {
+            crate::frame::drag(&ui);
+        }
+    });
+    let weak = ui.as_weak();
+    ui.on_window_resize(move |direction| {
+        if let Some(ui) = weak.upgrade() {
+            crate::frame::resize(&ui, direction);
+        }
+    });
+    let weak = ui.as_weak();
+    ui.on_window_minimize(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.window().set_minimized(true);
+        }
+    });
+    let weak = ui.as_weak();
+    ui.on_window_toggle_maximize(move || {
+        if let Some(ui) = weak.upgrade() {
+            let maximized = !ui.window().is_maximized();
+            ui.window().set_maximized(maximized);
+            ui.set_is_max(maximized);
+        }
+    });
+    let run = with(ui, app);
+    ui.on_window_close(move || {
+        run(&|app, ui| {
+            if app.tray.is_some() && app.settings.close_to_tray && !app.quitting {
+                let _ = ui.hide();
+            } else {
+                let _ = slint::quit_event_loop();
+            }
+        })
+    });
+
+    let run = with(ui, app);
+    ui.on_apply_speed_limit(move |text, unit| {
+        run(&|app, ui| {
+            let value: f64 = text.trim().replace(',', ".").parse().unwrap_or(0.0);
+            let kib = if unit == 1 { value * 1024.0 } else { value };
+            app.settings.speed_limit_kib = kib.max(0.0).round() as u64;
+            if app.settings.speed_limit_kib > 0 && !app.modules.is_enabled("speed-limit") {
+                let _ = app.modules.set_enabled("speed-limit", true);
+            }
+            app.apply_config();
+            app.save_settings();
+            settings_view::refresh(app, ui);
+        })
+    });
+    let run = with(ui, app);
+    ui.on_clear_speed_limit(move || {
+        run(&|app, ui| {
+            app.settings.speed_limit_kib = 0;
+            ui.set_speed_input(SharedString::new());
+            app.apply_config();
+            app.save_settings();
+            settings_view::refresh(app, ui);
+        })
+    });
+    let run = with(ui, app);
+    ui.on_pause_all(move || run(&|app, _| app.manager.pause_all()));
+    let run = with(ui, app);
+    ui.on_resume_all(move || run(&|app, _| app.manager.resume_all()));
+
+    let run = with(ui, app);
+    ui.on_input_confirm(move |value| {
+        run(&|app, ui| {
+            let Some((id, action)) = app.input_action.take() else { return };
+            match action.as_str() {
+                "rename" => {
+                    if let Err(e) = app.manager.rename(id, &value) {
+                        app.toast(e);
+                    }
+                }
+                "file-limit" => {
+                    let mb: f64 = value.trim().replace(',', ".").parse().unwrap_or(0.0);
+                    app.manager.set_job_limit(id, (mb * 1_048_576.0).max(0.0) as u64);
+                }
+                _ => {}
+            }
+            app.refresh(ui);
+        })
+    });
 }

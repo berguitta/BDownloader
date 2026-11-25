@@ -17,7 +17,7 @@ anyhow.workspace = true
 arboard = { version = "3", default-features = false }
 bd-core.workspace = true
 bd-net.workspace = true
-slint.workspace = true
+slint = { workspace = true, features = ["unstable-winit-030"] }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -26,6 +26,11 @@ png = "0.18"
 tray-icon = "0.27.0"
 notify-rust = "4.19.0"
 tokio-util.workspace = true
+rfd = "0.18.0"
+serde_json.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["ico", "png"] }
+directories.workspace = true
+reqwest.workspace = true
 
 [features]
 # Headless screenshots for development and CI (see src/snapshot.rs).

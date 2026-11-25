@@ -13,6 +13,8 @@ use url::Url;
 pub trait TaskControl: Send + Sync {
     fn progress(&self) -> Progress;
     fn cancel(&self);
+    /// Per-download speed limit, when the runner supports it.
+    fn set_speed_limit(&self, _bytes_per_sec: u64) {}
 }
 
 impl TaskControl for DownloadControl {
@@ -22,6 +24,10 @@ impl TaskControl for DownloadControl {
 
     fn cancel(&self) {
         DownloadControl::cancel(self)
+    }
+
+    fn set_speed_limit(&self, bytes_per_sec: u64) {
+        DownloadControl::set_speed_limit(self, bytes_per_sec)
     }
 }
 
@@ -71,6 +77,12 @@ impl ControlSlot {
         }
     }
 
+    pub fn set_speed_limit(&self, bytes_per_sec: u64) {
+        if let Some(control) = self.control.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            control.set_speed_limit(bytes_per_sec);
+        }
+    }
+
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
     }
@@ -103,14 +115,15 @@ impl Resolved {
 
 /// Turns a hoster link into a direct one (debrid, premium API…).
 pub trait LinkResolver: Send + Sync {
-    fn resolve<'a>(&'a self, url: &'a Url) -> BoxFuture<'a, Result<Resolved, String>>;
+    /// `slot` receives status texts (wait timers) and tells about cancels.
+    fn resolve<'a>(&'a self, url: &'a Url, slot: Arc<ControlSlot>) -> BoxFuture<'a, Result<Resolved, String>>;
 }
 
 /// Resolver that keeps every link as it is.
 pub struct NoResolver;
 
 impl LinkResolver for NoResolver {
-    fn resolve<'a>(&'a self, url: &'a Url) -> BoxFuture<'a, Result<Resolved, String>> {
+    fn resolve<'a>(&'a self, url: &'a Url, _slot: Arc<ControlSlot>) -> BoxFuture<'a, Result<Resolved, String>> {
         Box::pin(async move { Ok(Resolved::direct(url.clone())) })
     }
 }

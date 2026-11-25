@@ -11,6 +11,8 @@ export struct GrabRow {
     package: string,
     name: string,
     host: string,
+    icon: image,
+    has-icon: bool,
     size: string,
     // Package: "3 files · 2 online". Link: status text.
     status: string,
@@ -149,6 +151,7 @@ component GrabRowView inherits Rectangle {
         if !item.is-package: HorizontalLayout {
             width: 190px;
             spacing: 4px;
+            if item.has-icon: VerticalLayout { alignment: center; Image { width: 16px; height: 16px; source: item.icon; } }
             Cell { text: item.host; font-size: 13px; color: Theme.mut; }
             if item.mirrors != "": VerticalLayout { alignment: center; Pill { text: item.mirrors; tone: Theme.acc; } }
         }

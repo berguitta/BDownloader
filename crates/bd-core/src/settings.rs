@@ -45,6 +45,9 @@ pub struct Settings {
     /// Delete archives after a successful extraction.
     pub delete_archives: bool,
     pub clicknload_port: u16,
+    /// Other options, by id (see the settings schema of the app). Values are
+    /// stored as text so new options never break old settings files.
+    pub options: BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -64,6 +67,7 @@ impl Default for Settings {
             archive_passwords: Vec::new(),
             delete_archives: true,
             clicknload_port: crate::clicknload::DEFAULT_PORT,
+            options: BTreeMap::new(),
         }
     }
 }
@@ -76,6 +80,26 @@ fn default_download_dir() -> PathBuf {
 }
 
 impl Settings {
+    pub fn option(&self, id: &str) -> Option<&str> {
+        self.options.get(id).map(String::as_str)
+    }
+
+    pub fn flag(&self, id: &str, default: bool) -> bool {
+        self.option(id).map(|v| v == "true").unwrap_or(default)
+    }
+
+    pub fn number(&self, id: &str, default: i64) -> i64 {
+        self.option(id).and_then(|v| v.parse().ok()).unwrap_or(default)
+    }
+
+    pub fn text<'a>(&'a self, id: &str, default: &'a str) -> &'a str {
+        self.option(id).unwrap_or(default)
+    }
+
+    pub fn set_option(&mut self, id: &str, value: impl ToString) {
+        self.options.insert(id.to_owned(), value.to_string());
+    }
+
     /// Next to the settings: the saved download queue.
     pub fn queue_path() -> Option<PathBuf> {
         Self::default_path().map(|p| p.with_file_name("queue.json"))
