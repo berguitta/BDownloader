@@ -1,0 +1,195 @@
+// Small building blocks matching the BDownloader mockup.
+
+import { Theme, Icon } from "theme.slint";
+
+export component Btn inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> primary;
+    in property <bool> small;
+    callback clicked;
+
+    height: small ? 28px : 34px;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: primary ? Theme.acc : Theme.ln;
+    background: primary ? (ta.has-hover ? Theme.acc.brighter(8%) : Theme.acc) : (ta.has-hover ? Theme.hov : Theme.win);
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: small ? 9px : 11px;
+        padding-right: small ? 9px : 11px;
+        spacing: 6px;
+        alignment: center;
+        if root.icon != "": VerticalLayout {
+            alignment: center;
+            Icon {
+                commands: root.icon;
+                stroke: root.primary ? white : Theme.ink;
+            }
+        }
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            font-weight: 500;
+            font-size: root.small ? 13px : 14px;
+            color: root.primary ? white : Theme.ink;
+        }
+    }
+}
+
+export component IconBtn inherits Rectangle {
+    in property <string> icon;
+    in property <length> size: 30px;
+    in property <string> tooltip;
+    callback clicked;
+    width: size;
+    height: size;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.trk : transparent;
+    accessible-role: button;
+    accessible-label: tooltip;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Icon {
+        width: 16px;
+        height: 16px;
+        commands: root.icon;
+        stroke: ta.has-hover ? Theme.ink : Theme.mut;
+    }
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    in property <string> badge;
+    in property <bool> active;
+    callback clicked;
+
+    height: 40px;
+    border-radius: 8px;
+    background: active ? Theme.accs : ta.has-hover ? Theme.hov : transparent;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Icon { stroke: root.active ? Theme.acc : ta.has-hover ? Theme.ink : Theme.mut; commands: root.icon; }
+        }
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            font-weight: root.active ? 600 : 500;
+            color: root.active ? Theme.acc : ta.has-hover ? Theme.ink : Theme.mut;
+        }
+        if root.badge != "": VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 18px;
+                border-radius: 9px;
+                background: Theme.trk;
+                HorizontalLayout {
+                    padding-left: 7px;
+                    padding-right: 7px;
+                    Text { text: root.badge; font-size: 12px; vertical-alignment: center; color: Theme.ink; }
+                }
+            }
+        }
+    }
+}
+
+export component Chip inherits Rectangle {
+    in property <string> text;
+    in property <string> count;
+    in property <bool> active;
+    callback clicked;
+    height: 30px;
+    border-radius: 15px;
+    border-width: 1px;
+    border-color: active ? Theme.ink : Theme.ln;
+    background: active ? Theme.ink : transparent;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 11px;
+        spacing: 4px;
+        Text { text: root.text; font-size: 13px; vertical-alignment: center; color: root.active ? Theme.win : Theme.mut; }
+        Text { text: root.count; font-size: 13px; vertical-alignment: center; opacity: 0.75; color: root.active ? Theme.win : Theme.mut; }
+    }
+}
+
+export component Pill inherits Rectangle {
+    in property <string> text;
+    in property <color> tone: Theme.wa;
+    height: 20px;
+    border-radius: 10px;
+    background: tone.with-alpha(0.14);
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text { text: root.text; font-size: 12px; font-weight: 600; color: root.tone; vertical-alignment: center; }
+    }
+}
+
+// Progress bar split into one block per connection.
+export component SegBar inherits Rectangle {
+    in property <[float]> segs;
+    // 0 active, 1 finished, 2 idle
+    in property <int> kind;
+    in property <length> bar-height: 12px;
+    height: bar-height;
+    border-radius: 3px;
+    clip: true;
+    background: Theme.trk;
+    HorizontalLayout {
+        spacing: 1px;
+        for v in root.segs: Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.trk;
+            Rectangle {
+                x: 0;
+                width: parent.width * v;
+                background: root.kind == 1 ? Theme.ok : root.kind == 2 ? Theme.acc.mix(Theme.trk, 0.45) : Theme.acc;
+            }
+        }
+    }
+}
+
+export component Dot inherits Rectangle {
+    width: 7px;
+    height: 7px;
+    border-radius: 3.5px;
+}
+
+export component Cell inherits Text {
+    vertical-alignment: center;
+    overflow: elide;
+    font-size: 13.5px;
+    color: Theme.ink;
+}
+
+export component HeaderCell inherits Text {
+    font-size: 12px;
+    color: Theme.mut;
+    vertical-alignment: center;
+}
+
+export component HLine inherits Rectangle {
+    height: 1px;
+    background: Theme.ln;
+}

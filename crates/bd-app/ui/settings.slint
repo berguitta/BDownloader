@@ -1,0 +1,175 @@
+// Settings screen: appearance, downloads and the module list.
+
+import { ComboBox, SpinBox, LineEdit, Switch, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Pill, HLine } from "widgets.slint";
+
+export struct ModuleRow {
+    id: string,
+    name: string,
+    description: string,
+    category: string,
+    // First module of its category: show the category title above it.
+    first-in-category: bool,
+    enabled: bool,
+    available: bool,
+}
+
+export global SettingsState {
+    // 0 system, 1 light, 2 dark
+    in-out property <int> theme-mode;
+    in-out property <string> download-dir;
+    in-out property <int> parallel: 4;
+    in-out property <int> connections: 8;
+    in property <[ModuleRow]> modules;
+    in property <string> config-path;
+
+    callback theme-changed(int);
+    callback download-dir-changed(string);
+    callback parallel-changed(int);
+    callback connections-changed(int);
+    callback module-toggled(string, bool);
+}
+
+component SectionTitle inherits Text {
+    font-size: 12px;
+    font-weight: 600;
+    color: Theme.mut;
+}
+
+component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    min-height: 56px;
+    HLine { y: parent.height - 1px; }
+    HorizontalLayout {
+        spacing: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: root.title; font-weight: 500; color: Theme.ink; }
+            if root.hint != "": Text { text: root.hint; font-size: 12.5px; color: Theme.mut; wrap: word-wrap; }
+        }
+        HorizontalLayout {
+            alignment: end;
+            width: 280px;
+            @children
+        }
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: 24px;
+            padding-top: 18px;
+            spacing: 4px;
+            alignment: start;
+
+            Text { text: "Settings"; font-size: 22px; font-weight: 600; color: Theme.ink; }
+            Text { text: "Everything is optional: turn modules on or off, BDownloader only loads what you use."; color: Theme.mut; wrap: word-wrap; }
+
+            Rectangle { height: 12px; }
+            SectionTitle { text: "APPEARANCE"; }
+            SettingRow {
+                title: "Theme";
+                hint: "Light, dark, or follow the Windows setting.";
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        width: 200px;
+                        model: ["Follow Windows", "Light", "Dark"];
+                        current-index <=> SettingsState.theme-mode;
+                        selected => { SettingsState.theme-changed(self.current-index); }
+                    }
+                }
+            }
+            SettingRow {
+                title: "Language";
+                hint: "More languages are coming: the interface is ready for translations.";
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox { width: 200px; model: ["English"]; enabled: false; }
+                }
+            }
+
+            Rectangle { height: 12px; }
+            SectionTitle { text: "DOWNLOADS"; }
+            SettingRow {
+                title: "Download folder";
+                hint: "New downloads are saved here.";
+                VerticalLayout {
+                    alignment: center;
+                    LineEdit {
+                        width: 280px;
+                        text <=> SettingsState.download-dir;
+                        accepted(text) => { SettingsState.download-dir-changed(text); }
+                        edited(text) => { SettingsState.download-dir-changed(text); }
+                    }
+                }
+            }
+            SettingRow {
+                title: "Parallel downloads";
+                hint: "How many files download at the same time.";
+                VerticalLayout {
+                    alignment: center;
+                    SpinBox {
+                        width: 110px;
+                        minimum: 1;
+                        maximum: 50;
+                        value <=> SettingsState.parallel;
+                        edited(v) => { SettingsState.parallel-changed(v); }
+                    }
+                }
+            }
+            SettingRow {
+                title: "Connections per download";
+                hint: "Used when the server allows several connections (multi-connection module).";
+                VerticalLayout {
+                    alignment: center;
+                    SpinBox {
+                        width: 110px;
+                        minimum: 1;
+                        maximum: 32;
+                        value <=> SettingsState.connections;
+                        edited(v) => { SettingsState.connections-changed(v); }
+                    }
+                }
+            }
+
+            Rectangle { height: 12px; }
+            SectionTitle { text: "MODULES"; }
+            for m in SettingsState.modules: VerticalLayout {
+                if m.first-in-category: Text {
+                    text: m.category;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.ink;
+                    height: 34px;
+                    vertical-alignment: bottom;
+                }
+                SettingRow {
+                    title: m.name;
+                    hint: m.description;
+                    if !m.available: VerticalLayout {
+                        alignment: center;
+                        Pill { text: "Planned"; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Switch {
+                            checked: m.enabled;
+                            enabled: m.available;
+                            toggled => { SettingsState.module-toggled(m.id, self.checked); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 16px; }
+            Text { text: "Settings file: " + SettingsState.config-path; font-size: 12px; color: Theme.mut; wrap: word-wrap; }
+        }
+    }
+}

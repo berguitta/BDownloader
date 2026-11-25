@@ -1,0 +1,49 @@
+// Design tokens and icons shared by every screen.
+
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    // Follows the widget palette, which the window switches between light,
+    // dark and the system setting.
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+
+    out property <color> win: dark ? #10141f : #ffffff;
+    out property <color> chr: dark ? #0b0e17 : #f2f4f8;
+    out property <color> ink: dark ? #e7eaf2 : #141821;
+    out property <color> mut: dark ? #8f97aa : #5d6577;
+    out property <color> ln: dark ? #232a3a : #e3e6ee;
+    out property <color> hov: dark ? #161b29 : #f4f6fb;
+    out property <color> acc: dark ? #6d8bff : #1240e0;
+    out property <color> accs: dark ? #1a2350 : #e8edff;
+    out property <color> ok: dark ? #3fcf8e : #0a8a55;
+    out property <color> wa: dark ? #f2b141 : #b86e00;
+    out property <color> er: dark ? #ff6b6b : #cc2a2a;
+    out property <color> trk: dark ? #1d2333 : #e6e9f1;
+}
+
+// Stroke icons on a 24x24 grid.
+export global Icons {
+    out property <string> dl: "M12 4v11m-5-5 5 5 5-5M5 20h14";
+    out property <string> link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1";
+    out property <string> key: "M4 15a4 4 0 1 0 8 0a4 4 0 1 0-8 0M11 12l8-8m-3 3 2 2m-4 0 1.5 1.5";
+    out property <string> gear: "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9 7 7m10 10 2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1";
+    out property <string> play: "M7 5v14l11-7z";
+    out property <string> pause: "M8 5v14M16 5v14";
+    out property <string> plus: "M12 5v14M5 12h14";
+    out property <string> retry: "M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4";
+    out property <string> folder: "M3 7h6l2 2h10v10H3z";
+    out property <string> sun: "M8 12a4 4 0 1 0 8 0a4 4 0 1 0-8 0M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4";
+    out property <string> moon: "M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z";
+    out property <string> modules: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
+}
+
+export component Icon inherits Path {
+    width: 18px;
+    height: 18px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: transparent;
+    stroke: Theme.mut;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+}

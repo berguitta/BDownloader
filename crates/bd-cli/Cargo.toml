@@ -1,0 +1,25 @@
+[package]
+name = "bd-cli"
+description = "Command line front-end for the BDownloader engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "bdl"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+bd-core.workspace = true
+bd-net.workspace = true
+clap.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tracing-subscriber.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,357 @@
+// "Downloads" screen: toolbar, filters, live list, detail pane.
+
+import { SpinBox, LineEdit, ListView } from "std-widgets.slint";
+import { Theme, Icons, Icon } from "theme.slint";
+import { Btn, IconBtn, Chip, SegBar, Dot, Cell, HeaderCell, HLine } from "widgets.slint";
+
+export struct JobRow {
+    id: int,
+    name: string,
+    host: string,
+    size: string,
+    segs: [float],
+    // 0 active, 1 finished, 2 idle
+    bar-kind: int,
+    percent: string,
+    speed: string,
+    eta: string,
+    status: string,
+    // 0 queued, 1 downloading, 4 finished, 5 failed, 6 paused
+    status-kind: int,
+    selected: bool,
+}
+
+export struct KeyValue { key: string, value: string }
+
+export struct Connection { label: string, progress: float, percent: string }
+
+export global DownloadsState {
+    in property <[JobRow]> rows;
+    in property <int> total-jobs;
+    in property <string> count-all;
+    in property <string> count-active;
+    in property <string> count-queued;
+    in property <string> count-paused;
+    in property <string> count-finished;
+    in property <string> count-failed;
+    in property <string> speed-now;
+    in property <string> spark-line;
+    in property <string> spark-area;
+
+    in property <bool> has-selection;
+    in property <string> detail-title;
+    in property <[KeyValue]> detail-info;
+    in property <string> detail-right-title;
+    in property <[Connection]> detail-connections;
+
+    in-out property <int> filter: 0;
+    in-out property <string> query;
+    in-out property <int> parallel: 4;
+
+    callback filter-changed();
+    callback parallel-changed(int);
+    callback add-links();
+    callback start-all();
+    callback pause-all();
+    callback select(int);
+    callback activate(int);
+    callback pause-resume(int);
+    callback row-action(int, string);
+}
+
+component DownloadRow inherits Rectangle {
+    in property <JobRow> job;
+    callback select();
+    callback activate();
+    callback pause-resume();
+    callback action(string);
+
+    height: 34px;
+    background: job.selected ? Theme.accs : ta.has-hover ? Theme.hov : transparent;
+
+    function status-color() -> color {
+        if job.status-kind == 1 { return Theme.acc; }
+        if job.status-kind == 4 { return Theme.ok; }
+        if job.status-kind == 5 { return Theme.er; }
+        return Theme.mut;
+    }
+
+    ContextMenuArea {
+        Menu {
+            MenuItem {
+                title: job.status-kind == 6 ? "Resume" : job.status-kind == 5 ? "Retry" : "Pause";
+                enabled: job.status-kind != 4;
+                activated => { root.pause-resume(); }
+            }
+            MenuSeparator {}
+            MenuItem { title: "Open file"; enabled: job.status-kind == 4; activated => { root.action("open-file"); } }
+            MenuItem { title: "Open folder"; activated => { root.action("open-folder"); } }
+            MenuItem { title: "Copy link"; activated => { root.action("copy-link"); } }
+            MenuSeparator {}
+            MenuItem { title: "Remove from list"; activated => { root.action("remove"); } }
+            MenuItem { title: "Delete with files"; activated => { root.action("delete"); } }
+        }
+
+        ta := TouchArea {
+            clicked => { root.select(); }
+            double-clicked => { root.activate(); }
+        }
+    }
+
+    HLine { y: parent.height - 1px; }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            min-width: 0;
+            spacing: 7px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 17px;
+                    border-radius: 4px;
+                    background: Theme.accs;
+                    HorizontalLayout {
+                        padding-left: 5px;
+                        padding-right: 5px;
+                        Text { text: "HTTP"; font-size: 10.5px; font-weight: 600; vertical-alignment: center; color: Theme.acc; }
+                    }
+                }
+            }
+            Cell { text: job.name; horizontal-stretch: 1; min-width: 0; }
+        }
+        Cell { text: job.host; width: 150px; font-size: 13px; color: Theme.mut; }
+        Cell { text: job.size; width: 82px; horizontal-alignment: right; }
+        HorizontalLayout {
+            width: 170px;
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                SegBar { segs: job.segs; kind: job.bar-kind; }
+            }
+            Cell { text: job.percent; width: 38px; font-size: 12px; color: Theme.mut; horizontal-alignment: right; }
+        }
+        Cell { text: job.speed; width: 92px; horizontal-alignment: right; }
+        Cell { text: job.eta; width: 76px; horizontal-alignment: right; }
+        HorizontalLayout {
+            width: 170px;
+            spacing: 6px;
+            if job.status-kind == 1 || job.status-kind == 4 || job.status-kind == 5: VerticalLayout {
+                alignment: center;
+                Dot { background: root.status-color(); }
+            }
+            Cell { text: job.status; font-size: 13px; color: root.status-color(); horizontal-stretch: 1; }
+        }
+        VerticalLayout {
+            width: 40px;
+            alignment: center;
+            IconBtn {
+                tooltip: job.status-kind == 6 ? "Resume" : job.status-kind == 5 ? "Retry" : job.status-kind == 4 ? "Open folder" : "Pause";
+                icon: job.status-kind == 6 ? Icons.play : job.status-kind == 5 ? Icons.retry : job.status-kind == 4 ? Icons.folder : Icons.pause;
+                clicked => {
+                    if job.status-kind == 4 {
+                        root.action("open-folder");
+                    } else {
+                        root.pause-resume();
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component DownloadsPage inherits VerticalLayout {
+    // Toolbar.
+    Rectangle {
+        height: 52px;
+        HLine { y: parent.height - 1px; }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 6px;
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { primary: true; icon: Icons.plus; text: "Add links"; clicked => { DownloadsState.add-links(); } } }
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { icon: Icons.play; text: "Start all"; clicked => { DownloadsState.start-all(); } } }
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { icon: Icons.pause; text: "Pause all"; clicked => { DownloadsState.pause-all(); } } }
+            VerticalLayout { alignment: center; Rectangle { width: 1px; height: 24px; background: Theme.ln; } }
+            Text { text: "Parallel"; font-size: 13px; color: Theme.mut; vertical-alignment: center; }
+            VerticalLayout {
+                alignment: center;
+                SpinBox {
+                    width: 90px;
+                    minimum: 1;
+                    maximum: 50;
+                    value <=> DownloadsState.parallel;
+                    edited(v) => { DownloadsState.parallel-changed(v); }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 150px;
+                    height: 34px;
+                    Path {
+                        width: 100%;
+                        height: 100%;
+                        viewbox-width: 150;
+                        viewbox-height: 34;
+                        commands: DownloadsState.spark-area;
+                        fill: Theme.acc.with-alpha(0.16);
+                        stroke: transparent;
+                    }
+                    Path {
+                        width: 100%;
+                        height: 100%;
+                        viewbox-width: 150;
+                        viewbox-height: 34;
+                        commands: DownloadsState.spark-line;
+                        fill: transparent;
+                        stroke: Theme.acc;
+                        stroke-width: 1.6px;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                width: 100px;
+                Text { text: DownloadsState.speed-now; font-size: 18px; font-weight: 600; horizontal-alignment: right; color: Theme.ink; }
+                Text { text: "last 60 s"; font-size: 12px; horizontal-alignment: right; color: Theme.mut; }
+            }
+        }
+    }
+
+    // Filters.
+    Rectangle {
+        height: 44px;
+        HLine { y: parent.height - 1px; }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 6px;
+            VerticalLayout { alignment: center; Chip { text: "All"; count: DownloadsState.count-all; active: DownloadsState.filter == 0; clicked => { DownloadsState.filter = 0; DownloadsState.filter-changed(); } } }
+            VerticalLayout { alignment: center; Chip { text: "Active"; count: DownloadsState.count-active; active: DownloadsState.filter == 1; clicked => { DownloadsState.filter = 1; DownloadsState.filter-changed(); } } }
+            VerticalLayout { alignment: center; Chip { text: "Queued"; count: DownloadsState.count-queued; active: DownloadsState.filter == 2; clicked => { DownloadsState.filter = 2; DownloadsState.filter-changed(); } } }
+            VerticalLayout { alignment: center; Chip { text: "Paused"; count: DownloadsState.count-paused; active: DownloadsState.filter == 3; clicked => { DownloadsState.filter = 3; DownloadsState.filter-changed(); } } }
+            VerticalLayout { alignment: center; Chip { text: "Finished"; count: DownloadsState.count-finished; active: DownloadsState.filter == 4; clicked => { DownloadsState.filter = 4; DownloadsState.filter-changed(); } } }
+            VerticalLayout { alignment: center; Chip { text: "Errors"; count: DownloadsState.count-failed; active: DownloadsState.filter == 5; clicked => { DownloadsState.filter = 5; DownloadsState.filter-changed(); } } }
+            Rectangle { horizontal-stretch: 1; }
+            VerticalLayout {
+                alignment: center;
+                LineEdit {
+                    width: 240px;
+                    placeholder-text: "Filter by name or hoster";
+                    text <=> DownloadsState.query;
+                    edited => { DownloadsState.filter-changed(); }
+                }
+            }
+        }
+    }
+
+    // Column header.
+    Rectangle {
+        height: 30px;
+        background: Theme.chr;
+        HLine { y: parent.height - 1px; }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 10px;
+            HeaderCell { text: "Name"; horizontal-stretch: 1; }
+            HeaderCell { text: "Hoster"; width: 150px; }
+            HeaderCell { text: "Size"; width: 82px; horizontal-alignment: right; }
+            HeaderCell { text: "Progress"; width: 170px; }
+            HeaderCell { text: "Speed"; width: 92px; horizontal-alignment: right; }
+            HeaderCell { text: "ETA"; width: 76px; horizontal-alignment: right; }
+            HeaderCell { text: "Status"; width: 170px; }
+            Rectangle { width: 40px; }
+        }
+    }
+
+    // List, or an empty state.
+    Rectangle {
+        vertical-stretch: 1;
+        if DownloadsState.total-jobs == 0: VerticalLayout {
+            alignment: center;
+            spacing: 12px;
+            HorizontalLayout {
+                alignment: center;
+                Icon { width: 40px; height: 40px; commands: Icons.dl; stroke: Theme.mut; stroke-width: 1.4px; }
+            }
+            Text { text: "No downloads yet"; font-size: 16px; font-weight: 600; horizontal-alignment: center; color: Theme.ink; }
+            Text { text: "Click Add links and paste one or more links, or a whole block of text."; horizontal-alignment: center; color: Theme.mut; }
+            HorizontalLayout {
+                alignment: center;
+                Btn { primary: true; icon: Icons.plus; text: "Add links"; clicked => { DownloadsState.add-links(); } }
+            }
+        }
+        if DownloadsState.total-jobs > 0: ListView {
+            width: 100%;
+            height: 100%;
+            for job[i] in DownloadsState.rows: DownloadRow {
+                job: job;
+                select => { DownloadsState.select(i); }
+                activate => { DownloadsState.activate(i); }
+                pause-resume => { DownloadsState.pause-resume(i); }
+                action(name) => { DownloadsState.row-action(i, name); }
+            }
+        }
+    }
+
+    // Detail pane.
+    if DownloadsState.has-selection: Rectangle {
+        height: 180px;
+        background: Theme.chr;
+        HLine { y: 0; }
+        HorizontalLayout {
+            padding: 14px;
+            padding-top: 12px;
+            spacing: 18px;
+            VerticalLayout {
+                horizontal-stretch: 11;
+                spacing: 6px;
+                Text { text: DownloadsState.detail-title; font-size: 15px; font-weight: 600; color: Theme.ink; overflow: elide; }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout {
+                        spacing: 3px;
+                        for kv in DownloadsState.detail-info: Text { text: kv.key; font-size: 13px; color: Theme.mut; }
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 3px;
+                        for kv in DownloadsState.detail-info: Text { text: kv.value; font-size: 13px; color: Theme.ink; overflow: elide; }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+            VerticalLayout {
+                horizontal-stretch: 10;
+                spacing: 5px;
+                Text { text: DownloadsState.detail-right-title; font-size: 13px; font-weight: 600; color: Theme.mut; }
+                Flickable {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                        spacing: 5px;
+                        for c in DownloadsState.detail-connections: HorizontalLayout {
+                            spacing: 8px;
+                            height: 14px;
+                            Text { text: c.label; width: 60px; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                SegBar { segs: [c.progress]; kind: c.progress >= 1 ? 1 : 0; bar-height: 10px; }
+                            }
+                            Text { text: c.percent; width: 48px; font-size: 12px; color: Theme.mut; horizontal-alignment: right; vertical-alignment: center; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
