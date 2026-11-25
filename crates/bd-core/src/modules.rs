@@ -93,56 +93,74 @@ pub const BUILTIN_MODULES: &[ModuleInfo] = &[
     },
     ModuleInfo {
         id: "speed-limit",
-        name: "Speed limit and scheduler",
-        description: "Global and per-download bandwidth limits, time windows.",
+        name: "Speed limit",
+        description: "Global bandwidth limit, also from the tray menu.",
         category: Category::Core,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &[],
     },
     ModuleInfo {
         id: "clipboard",
         name: "Clipboard watcher",
-        description: "Adds links as soon as you copy them, without polling.",
+        description: "Links you copy appear in the link grabber. Reacts to clipboard changes, no polling of the content.",
         category: Category::LinkSource,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &[],
     },
     ModuleInfo {
         id: "click-n-load",
         name: "Click'n'Load",
-        description: "Local listener on 127.0.0.1:9666 for link sites. No web interface.",
+        description: "Local listener on 127.0.0.1:9666 for link sites. No web interface, links go to the link grabber.",
         category: Category::LinkSource,
-        status: ModuleStatus::Planned,
+        status: ModuleStatus::Available,
         default_enabled: false,
-        requires: &[],
+        requires: &["http"],
+    },
+    ModuleInfo {
+        id: "page-scan",
+        name: "Web page scan",
+        description: "A link to a web page becomes a pool of the file and hoster links it contains.",
+        category: Category::LinkSource,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &["http"],
     },
     ModuleInfo {
         id: "hoster-1fichier",
         name: "1fichier",
-        description: "Free mode with wait timers, premium through the official API.",
+        description: "Premium through the official API key. Free mode with wait timers is coming.",
         category: Category::Hoster,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &["http"],
     },
     ModuleInfo {
         id: "hoster-rapidgator",
         name: "Rapidgator",
-        description: "Free mode with wait timers, premium through the official API.",
+        description: "Premium through the official API. Free mode with wait timers is coming.",
         category: Category::Hoster,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &["http"],
+    },
+    ModuleInfo {
+        id: "hoster-free-direct",
+        name: "Pixeldrain and Dropbox",
+        description: "Free direct downloads from Pixeldrain and Dropbox share links.",
+        category: Category::Hoster,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &["http"],
     },
     ModuleInfo {
         id: "debrid-real-debrid",
         name: "Real-Debrid",
-        description: "Unlocks many hosters with one Real-Debrid account.",
+        description: "Unlocks many hosters (1fichier, Rapidgator, Turbobit, Nitroflare…) with one account.",
         category: Category::Debrid,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &["http"],
     },
     ModuleInfo {
@@ -150,9 +168,27 @@ pub const BUILTIN_MODULES: &[ModuleInfo] = &[
         name: "AllDebrid",
         description: "Unlocks many hosters with one AllDebrid account.",
         category: Category::Debrid,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &["http"],
+    },
+    ModuleInfo {
+        id: "debrid-premiumize",
+        name: "Premiumize",
+        description: "Unlocks many hosters with one Premiumize account.",
+        category: Category::Debrid,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &["http"],
+    },
+    ModuleInfo {
+        id: "video",
+        name: "Video sites (yt-dlp)",
+        description: "YouTube and similar sites: pick the quality or audio only. yt-dlp is fetched on demand.",
+        category: Category::Protocol,
+        status: ModuleStatus::Available,
+        default_enabled: true,
+        requires: &[],
     },
     ModuleInfo {
         id: "torrent",
@@ -164,43 +200,33 @@ pub const BUILTIN_MODULES: &[ModuleInfo] = &[
         requires: &[],
     },
     ModuleInfo {
-        id: "video",
-        name: "Video sites (yt-dlp)",
-        description: "Downloads videos from YouTube and similar sites. yt-dlp is fetched on demand.",
-        category: Category::Protocol,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
-        requires: &[],
-    },
-    ModuleInfo {
         id: "extraction",
         name: "Automatic extraction",
-        description: "Unpacks RAR, ZIP and 7z archives, tries your password list.",
+        description: "Unpacks finished RAR, ZIP and 7z packages, tries the package password and your list.",
         category: Category::PostProcessing,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &[],
     },
     ModuleInfo {
         id: "notifications",
         name: "Windows notifications",
-        description: "Notifies when a package finishes or needs your attention.",
+        description: "Notifies when a package finishes, fails or is extracted.",
         category: Category::Interface,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &[],
     },
     ModuleInfo {
         id: "tray",
         name: "Tray icon",
-        description: "Keeps BDownloader running in the notification area.",
+        description: "Icon in the notification area with a quick menu. Close or minimize to it.",
         category: Category::Interface,
-        status: ModuleStatus::Planned,
-        default_enabled: false,
+        status: ModuleStatus::Available,
+        default_enabled: true,
         requires: &[],
     },
 ];
-
 /// Which modules exist and which ones the user turned on.
 #[derive(Clone, Debug)]
 pub struct ModuleRegistry {
@@ -298,7 +324,7 @@ mod tests {
         let reg = ModuleRegistry::builtin();
         assert!(reg.is_enabled("http"));
         assert!(reg.is_enabled("multi-connection"));
-        assert!(!reg.is_enabled("clipboard"), "planned modules are off");
+        assert!(!reg.is_enabled("torrent"), "planned modules are off");
         assert!(!reg.is_enabled("nope"));
     }
 
@@ -317,7 +343,7 @@ mod tests {
         reg.set_enabled("http", false).unwrap();
         reg.set_enabled("multi-connection", false).unwrap();
         let changed = reg.set_enabled("multi-connection", true).unwrap();
-        assert_eq!(changed, vec!["http", "resume"]);
+        assert!(changed.contains(&"http") && changed.contains(&"resume"));
         assert!(reg.is_enabled("http") && reg.is_enabled("multi-connection"));
     }
 

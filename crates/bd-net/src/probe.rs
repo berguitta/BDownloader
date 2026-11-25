@@ -1,4 +1,6 @@
-use reqwest::header::{HeaderMap, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, LAST_MODIFIED, RANGE};
+use reqwest::header::{
+    HeaderMap, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE,
+};
 use reqwest::StatusCode;
 use url::Url;
 
@@ -16,6 +18,8 @@ pub struct RemoteFile {
     pub ranges: bool,
     /// Name suggested by the server or derived from the URL.
     pub file_name: Option<String>,
+    /// Content-Type of the answer, e.g. to detect web pages.
+    pub content_type: Option<String>,
     /// Validators used to detect that the remote file changed between runs.
     pub etag: Option<String>,
     pub last_modified: Option<String>,
@@ -23,8 +27,12 @@ pub struct RemoteFile {
 
 /// Asks for the first byte only. Unlike `HEAD`, which many hosters answer
 /// badly, this tells us reliably whether ranges work and what the size is.
-pub(crate) async fn probe(client: &reqwest::Client, url: &Url) -> Result<RemoteFile> {
-    let response = client.get(url.clone()).header(RANGE, "bytes=0-0").send().await?;
+pub(crate) async fn probe(client: &reqwest::Client, url: &Url, headers: &[(String, String)]) -> Result<RemoteFile> {
+    let mut request = client.get(url.clone()).header(RANGE, "bytes=0-0");
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let response = request.send().await?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::Status(status.as_u16()));
@@ -48,6 +56,7 @@ pub(crate) async fn probe(client: &reqwest::Client, url: &Url) -> Result<RemoteF
         size,
         ranges,
         file_name,
+        content_type: header_string(&headers, CONTENT_TYPE),
         etag: header_string(&headers, ETAG),
         last_modified: header_string(&headers, LAST_MODIFIED),
     })

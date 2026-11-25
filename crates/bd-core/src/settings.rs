@@ -29,6 +29,22 @@ pub struct Settings {
     pub connections_per_download: usize,
     /// Module id → enabled, only for modules the user changed.
     pub modules: BTreeMap<String, bool>,
+    /// Global speed limit in KiB/s, 0 for none (speed-limit module).
+    pub speed_limit_kib: u64,
+    /// Start queued downloads when the app opens.
+    pub start_on_launch: bool,
+    /// Send grabbed links straight to the queue instead of the link grabber
+    /// (never for Click'n'Load).
+    pub auto_start_grabbed: bool,
+    /// Closing the window keeps BDownloader running in the tray (tray module).
+    pub close_to_tray: bool,
+    /// Minimizing the window hides it to the tray (tray module).
+    pub minimize_to_tray: bool,
+    /// Passwords tried on archives, in order (extraction module).
+    pub archive_passwords: Vec<String>,
+    /// Delete archives after a successful extraction.
+    pub delete_archives: bool,
+    pub clicknload_port: u16,
 }
 
 impl Default for Settings {
@@ -40,6 +56,14 @@ impl Default for Settings {
             max_parallel: 4,
             connections_per_download: 8,
             modules: BTreeMap::new(),
+            speed_limit_kib: 0,
+            start_on_launch: true,
+            auto_start_grabbed: false,
+            close_to_tray: true,
+            minimize_to_tray: false,
+            archive_passwords: Vec::new(),
+            delete_archives: true,
+            clicknload_port: crate::clicknload::DEFAULT_PORT,
         }
     }
 }
@@ -52,6 +76,11 @@ fn default_download_dir() -> PathBuf {
 }
 
 impl Settings {
+    /// Next to the settings: the saved download queue.
+    pub fn queue_path() -> Option<PathBuf> {
+        Self::default_path().map(|p| p.with_file_name("queue.json"))
+    }
+
     /// `BD_SETTINGS` overrides the location (handy for development and
     /// portable installs).
     pub fn default_path() -> Option<PathBuf> {

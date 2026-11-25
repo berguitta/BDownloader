@@ -17,6 +17,7 @@ use url::Url;
 use crate::name::sanitize_file_name;
 use crate::probe::{probe, RemoteFile};
 use crate::state::{self, ResumeState, Segment, STATE_VERSION};
+use crate::rate::RateLimiter;
 use crate::{Error, Result};
 
 const DEFAULT_MIN_SEGMENT: u64 = 1024 * 1024;
@@ -35,11 +36,13 @@ pub struct DownloadRequest {
     pub connections: usize,
     /// Continue from saved progress when possible (default `true`).
     pub resume: bool,
+    /// Extra headers sent with every request (cookies, authorization).
+    pub headers: Vec<(String, String)>,
 }
 
 impl DownloadRequest {
     pub fn new(url: Url, dest_dir: impl Into<PathBuf>) -> Self {
-        DownloadRequest { url, dest_dir: dest_dir.into(), file_name: None, connections: 8, resume: true }
+        DownloadRequest { url, dest_dir: dest_dir.into(), file_name: None, connections: 8, resume: true, headers: Vec::new() }
     }
 
     pub fn resume(mut self, resume: bool) -> Self {
@@ -54,6 +57,11 @@ impl DownloadRequest {
 
     pub fn file_name(mut self, name: impl Into<String>) -> Self {
         self.file_name = Some(name.into());
+        self
+    }
+
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
         self
     }
 }
@@ -192,6 +200,8 @@ pub struct Engine {
     /// Connection limits shared by every download to the same host, so
     /// several downloads together respect what the server accepts.
     hosts: Arc<Mutex<HashMap<String, Arc<ConnectionLimiter>>>>,
+    /// Global bandwidth limit.
+    rate: Arc<RateLimiter>,
 }
 
 impl Engine {
@@ -211,6 +221,7 @@ impl Engine {
             retries: DEFAULT_RETRIES,
             max_per_host: DEFAULT_MAX_PER_HOST,
             hosts: Arc::default(),
+            rate: Arc::default(),
         }
     }
 
@@ -238,8 +249,27 @@ impl Engine {
         hosts.entry(host).or_insert_with(|| Arc::new(ConnectionLimiter::new(self.max_per_host))).clone()
     }
 
+    /// Global speed limit in bytes per second for every download of this
+    /// engine and its clones. 0 removes the limit. Takes effect immediately.
+    pub fn set_speed_limit(&self, bytes_per_sec: u64) {
+        self.rate.set_limit(bytes_per_sec);
+    }
+
+    pub fn speed_limit(&self) -> u64 {
+        self.rate.limit()
+    }
+
+    /// The shared HTTP client, for callers that talk to APIs.
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     pub async fn probe(&self, url: &Url) -> Result<RemoteFile> {
-        probe(&self.client, url).await
+        probe(&self.client, url, &[]).await
+    }
+
+    pub async fn probe_with_headers(&self, url: &Url, headers: &[(String, String)]) -> Result<RemoteFile> {
+        probe(&self.client, url, headers).await
     }
 
     /// Starts a download on the current Tokio runtime.
@@ -259,7 +289,7 @@ async fn run(
 ) -> Result<PathBuf> {
     let remote = tokio::select! {
         _ = cancel.cancelled() => return Err(Error::Cancelled),
-        remote = engine.probe(&request.url) => remote?,
+        remote = engine.probe_with_headers(&request.url, &request.headers) => remote?,
     };
     let name = request
         .file_name
@@ -299,6 +329,7 @@ async fn run(
     let mut workers = JoinSet::new();
     let count = shared.lock().segments.len();
     let limiter = Arc::new(ConnectionLimiter::new(request.connections));
+    let headers = Arc::new(request.headers.clone());
     for idx in 0..count {
         if !shared.segment(idx).is_complete() {
             workers.spawn(worker(
@@ -309,6 +340,7 @@ async fn run(
                 idx,
                 remote.ranges,
                 limiter.clone(),
+                headers.clone(),
                 cancel.clone(),
             ));
         }
@@ -438,6 +470,7 @@ async fn worker(
     idx: usize,
     ranges: bool,
     limiter: Arc<ConnectionLimiter>,
+    headers: Arc<Vec<(String, String)>>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let host = engine.host_limiter(&url);
@@ -451,7 +484,7 @@ async fn worker(
             _ = cancel.cancelled() => return Err(Error::Cancelled),
             permit = host.permits.acquire() => permit.map_err(|_| Error::Cancelled)?,
         };
-        let result = fetch_segment(&engine.client, &url, &part, &shared, idx, ranges, &cancel).await;
+        let result = fetch_segment(&engine, &headers, &url, &part, &shared, idx, ranges, &cancel).await;
         if matches!(&result, Err(e) if is_throttled(e)) && host.reduce() {
             // Give this host slot up for good and wait for another connection
             // to the host to finish before trying this segment again.
@@ -482,8 +515,10 @@ async fn worker(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_segment(
-    client: &reqwest::Client,
+    engine: &Engine,
+    headers: &[(String, String)],
     url: &Url,
     part: &Path,
     shared: &Arc<Shared>,
@@ -495,7 +530,10 @@ async fn fetch_segment(
     if seg.is_complete() {
         return Ok(());
     }
-    let mut request = client.get(url.clone());
+    let mut request = engine.client.get(url.clone());
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
     if ranges {
         let offset = seg.start + seg.done;
         let range = match seg.end {
@@ -548,6 +586,14 @@ async fn fetch_segment(
             _ => &chunk[..],
         };
         file.write_all(data).await?;
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                file.flush().await?;
+                shared.lock().segments[idx].done += data.len() as u64;
+                return Err(Error::Cancelled);
+            }
+            _ = engine.rate.acquire(data.len()) => {}
+        }
         let complete = {
             let mut inner = shared.lock();
             inner.segments[idx].done += data.len() as u64;

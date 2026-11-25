@@ -13,9 +13,11 @@ mod engine;
 mod error;
 mod name;
 mod probe;
+mod rate;
 mod state;
 
 pub use engine::{DownloadControl, DownloadRequest, DownloadTask, Engine, Progress, SegmentProgress};
 pub use error::{Error, Result};
 pub use name::{file_name_from_url, sanitize_file_name};
 pub use probe::RemoteFile;
+pub use rate::RateLimiter;

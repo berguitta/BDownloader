@@ -1,18 +1,64 @@
-//! Download queue: runs up to `max_parallel` downloads, lets the UI pause,
-//! resume and remove them, and exposes snapshots with live speed.
+//! Download queue: runs up to `max_parallel` jobs (HTTP or video), lets the
+//! UI pause, resume and remove them, reports finished packages, and can be
+//! saved and restored between sessions.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use bd_net::{DownloadControl, DownloadRequest, Engine, Error as NetError, SegmentProgress};
+use bd_net::{DownloadRequest, Engine, SegmentProgress};
+use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use url::Url;
 
+use crate::task::{ControlSlot, LinkResolver, NoResolver, RunError, RunResult};
+use crate::video::{VideoBackend, VideoFormat};
+
 pub type JobId = u64;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// How a job is downloaded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum JobKind {
+    /// Plain or hoster link through the HTTP engine.
+    Http,
+    /// Video site through yt-dlp.
+    Video { format: VideoFormat },
+}
+
+/// Everything needed to (re)start a job.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobSpec {
+    pub url: Url,
+    /// Name to save under; the server's name is used otherwise.
+    #[serde(default)]
+    pub name: Option<String>,
+    pub dest_dir: PathBuf,
+    /// Package the file belongs to (extraction runs per package).
+    #[serde(default)]
+    pub package: Option<String>,
+    /// Archive password for this package.
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default = "default_kind")]
+    pub kind: JobKind,
+}
+
+fn default_kind() -> JobKind {
+    JobKind::Http
+}
+
+impl JobSpec {
+    pub fn http(url: Url, dest_dir: impl Into<PathBuf>) -> Self {
+        JobSpec { url, name: None, dest_dir: dest_dir.into(), package: None, password: None, kind: JobKind::Http }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", content = "error", rename_all = "snake_case")]
 pub enum JobState {
     Queued,
     Downloading,
@@ -25,6 +71,7 @@ pub enum JobState {
 #[derive(Clone, Debug)]
 pub struct JobSnapshot {
     pub id: JobId,
+    pub spec: JobSpec,
     pub url: Url,
     pub name: String,
     pub state: JobState,
@@ -37,6 +84,8 @@ pub struct JobSnapshot {
     pub dest_dir: PathBuf,
     pub path: Option<PathBuf>,
     pub resumed: bool,
+    /// Status text while there is no progress yet ("Resolving link…").
+    pub status: Option<String>,
 }
 
 impl JobSnapshot {
@@ -46,6 +95,31 @@ impl JobSnapshot {
         (self.state == JobState::Downloading && self.speed > 1.0)
             .then(|| total.saturating_sub(self.downloaded) as f64 / self.speed)
     }
+}
+
+/// What gets saved between sessions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobRecord {
+    pub spec: JobSpec,
+    #[serde(flatten)]
+    pub state: JobState,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub downloaded: u64,
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+}
+
+/// Something the application may want to react to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ManagerEvent {
+    JobFinished { id: JobId, name: String, path: PathBuf },
+    JobFailed { id: JobId, name: String, error: String },
+    /// Every file of a package is finished.
+    PackageFinished { package: String, dir: PathBuf, files: Vec<PathBuf>, password: Option<String> },
 }
 
 /// Queue settings, usually derived from [`crate::Settings`] and modules.
@@ -62,11 +136,10 @@ pub struct ManagerConfig {
 
 struct Job {
     id: JobId,
-    url: Url,
+    spec: JobSpec,
     name: Option<String>,
-    dest_dir: PathBuf,
     state: JobState,
-    control: Option<DownloadControl>,
+    slot: Option<Arc<ControlSlot>>,
     waiter: Option<JoinHandle<()>>,
     /// Incremented on every start so late completions of an old run are ignored.
     generation: u64,
@@ -81,8 +154,31 @@ struct Job {
 }
 
 impl Job {
+    fn new(id: JobId, spec: JobSpec) -> Self {
+        Job {
+            id,
+            name: spec.name.clone(),
+            spec,
+            state: JobState::Queued,
+            slot: None,
+            waiter: None,
+            generation: 0,
+            total: None,
+            downloaded: 0,
+            segments: Vec::new(),
+            connections: 0,
+            speed: 0.0,
+            last_sample: None,
+            path: None,
+            resumed: false,
+        }
+    }
+
     fn display_name(&self) -> String {
-        self.name.clone().or_else(|| bd_net::file_name_from_url(&self.url)).unwrap_or_else(|| self.url.to_string())
+        self.name
+            .clone()
+            .or_else(|| bd_net::file_name_from_url(&self.spec.url))
+            .unwrap_or_else(|| self.spec.url.to_string())
     }
 }
 
@@ -90,22 +186,54 @@ struct Inner {
     jobs: Vec<Job>,
     next_id: JobId,
     config: ManagerConfig,
+    video: Option<VideoBackend>,
+    resolver: Arc<dyn LinkResolver>,
+    /// Packages already reported as finished.
+    reported: HashSet<String>,
+    events: Sender<ManagerEvent>,
+    /// Bumped on every change worth saving.
+    revision: u64,
 }
 
 #[derive(Clone)]
 pub struct DownloadManager {
     inner: Arc<Mutex<Inner>>,
+    events: Arc<Mutex<Option<Receiver<ManagerEvent>>>>,
     engine: Engine,
     runtime: Handle,
 }
 
 impl DownloadManager {
     pub fn new(engine: Engine, config: ManagerConfig, runtime: Handle) -> Self {
-        DownloadManager { inner: Arc::new(Mutex::new(Inner { jobs: Vec::new(), next_id: 1, config })), engine, runtime }
+        let (tx, rx) = channel();
+        DownloadManager {
+            inner: Arc::new(Mutex::new(Inner {
+                jobs: Vec::new(),
+                next_id: 1,
+                config,
+                video: None,
+                resolver: Arc::new(NoResolver),
+                reported: HashSet::new(),
+                events: tx,
+                revision: 0,
+            })),
+            events: Arc::new(Mutex::new(Some(rx))),
+            engine,
+            runtime,
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Takes the event receiver (once).
+    pub fn take_events(&self) -> Option<Receiver<ManagerEvent>> {
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    pub fn engine(&self) -> &Engine {
+        &self.engine
     }
 
     pub fn config(&self) -> ManagerConfig {
@@ -117,31 +245,37 @@ impl DownloadManager {
         self.schedule();
     }
 
-    /// Queues a link and returns its id.
+    pub fn set_video_backend(&self, backend: Option<VideoBackend>) {
+        self.lock().video = backend;
+    }
+
+    pub fn set_resolver(&self, resolver: Arc<dyn LinkResolver>) {
+        self.lock().resolver = resolver;
+    }
+
+    /// Global speed limit in bytes per second, 0 for none.
+    pub fn set_speed_limit(&self, bytes_per_sec: u64) {
+        self.engine.set_speed_limit(bytes_per_sec);
+    }
+
+    /// Changes every time something worth saving changes.
+    pub fn revision(&self) -> u64 {
+        self.lock().revision
+    }
+
+    /// Queues a plain link in the default folder and returns its id.
     pub fn add(&self, url: Url) -> JobId {
+        let dir = self.lock().config.dest_dir.clone();
+        self.add_spec(JobSpec::http(url, dir))
+    }
+
+    pub fn add_spec(&self, spec: JobSpec) -> JobId {
         let id = {
             let mut inner = self.lock();
             let id = inner.next_id;
             inner.next_id += 1;
-            let dest_dir = inner.config.dest_dir.clone();
-            inner.jobs.push(Job {
-                id,
-                url,
-                name: None,
-                dest_dir,
-                state: JobState::Queued,
-                control: None,
-                waiter: None,
-                generation: 0,
-                total: None,
-                downloaded: 0,
-                segments: Vec::new(),
-                connections: 0,
-                speed: 0.0,
-                last_sample: None,
-                path: None,
-                resumed: false,
-            });
+            inner.jobs.push(Job::new(id, spec));
+            inner.revision += 1;
             id
         };
         self.schedule();
@@ -154,11 +288,12 @@ impl DownloadManager {
             if matches!(job.state, JobState::Downloading | JobState::Queued) {
                 job.state = JobState::Paused;
                 job.speed = 0.0;
-                if let Some(control) = &job.control {
-                    control.cancel();
+                if let Some(slot) = &job.slot {
+                    slot.cancel();
                 }
             }
         }
+        inner.revision += 1;
     }
 
     /// Resumes a paused job or retries a failed one.
@@ -170,6 +305,7 @@ impl DownloadManager {
                     job.state = JobState::Queued;
                 }
             }
+            inner.revision += 1;
         }
         self.schedule();
     }
@@ -185,8 +321,16 @@ impl DownloadManager {
             for job in inner.jobs.iter_mut().filter(|j| j.state == JobState::Paused) {
                 job.state = JobState::Queued;
             }
+            inner.revision += 1;
         }
         self.schedule();
+    }
+
+    /// Removes every finished job from the list (files stay on disk).
+    pub fn clear_finished(&self) {
+        let mut inner = self.lock();
+        inner.jobs.retain(|j| j.state != JobState::Finished);
+        inner.revision += 1;
     }
 
     /// Removes a job. With `delete_files`, also deletes the partial or
@@ -195,14 +339,15 @@ impl DownloadManager {
         let removed = {
             let mut inner = self.lock();
             let Some(pos) = inner.jobs.iter().position(|j| j.id == id) else { return };
+            inner.revision += 1;
             inner.jobs.remove(pos)
         };
-        if let Some(control) = &removed.control {
-            control.cancel();
+        if let Some(slot) = &removed.slot {
+            slot.cancel();
         }
         if delete_files {
             let name = removed.name.clone();
-            let dir = removed.dest_dir.clone();
+            let dir = removed.spec.dest_dir.clone();
             let path = removed.path.clone();
             let waiter = removed.waiter;
             self.runtime.spawn(async move {
@@ -221,27 +366,25 @@ impl DownloadManager {
         let mut inner = self.lock();
         let now = Instant::now();
         for job in inner.jobs.iter_mut() {
-            if let Some(control) = &job.control {
-                let p = control.progress();
-                job.name = p.file_name.clone().or(job.name.take());
-                job.total = p.total;
-                job.downloaded = p.downloaded;
-                job.segments = p.segments;
-                job.connections = p.active_connections;
-                job.resumed = p.resumed;
-                if job.state == JobState::Downloading {
-                    match job.last_sample {
-                        Some((at, bytes)) => {
-                            let dt = now.duration_since(at).as_secs_f64();
-                            if dt >= 0.2 {
-                                let instant = p.downloaded.saturating_sub(bytes) as f64 / dt;
-                                job.speed = if job.speed == 0.0 { instant } else { job.speed * 0.7 + instant * 0.3 };
-                                job.last_sample = Some((now, p.downloaded));
-                            }
+            let Some(p) = job.slot.as_ref().and_then(|s| s.progress()) else { continue };
+            job.name = p.file_name.clone().or(job.name.take());
+            job.total = p.total;
+            job.downloaded = p.downloaded;
+            job.segments = p.segments;
+            job.connections = p.active_connections;
+            job.resumed = p.resumed;
+            if job.state == JobState::Downloading {
+                match job.last_sample {
+                    Some((at, bytes)) => {
+                        let dt = now.duration_since(at).as_secs_f64();
+                        if dt >= 0.2 {
+                            let instant = p.downloaded.saturating_sub(bytes) as f64 / dt;
+                            job.speed = if job.speed == 0.0 { instant } else { job.speed * 0.7 + instant * 0.3 };
+                            job.last_sample = Some((now, p.downloaded));
                         }
-                        // The first sample may include bytes from a previous run.
-                        None => job.last_sample = Some((now, p.downloaded)),
                     }
+                    // The first sample may include bytes from a previous run.
+                    None => job.last_sample = Some((now, p.downloaded)),
                 }
             }
         }
@@ -250,7 +393,8 @@ impl DownloadManager {
             .iter()
             .map(|j| JobSnapshot {
                 id: j.id,
-                url: j.url.clone(),
+                spec: j.spec.clone(),
+                url: j.spec.url.clone(),
                 name: j.display_name(),
                 state: j.state.clone(),
                 total: j.total,
@@ -258,11 +402,59 @@ impl DownloadManager {
                 speed: if j.state == JobState::Downloading { j.speed } else { 0.0 },
                 segments: j.segments.clone(),
                 connections: j.connections,
-                dest_dir: j.dest_dir.clone(),
+                dest_dir: j.spec.dest_dir.clone(),
                 path: j.path.clone(),
                 resumed: j.resumed,
+                status: j.slot.as_ref().and_then(|s| s.status()),
             })
             .collect()
+    }
+
+    /// Jobs to save so the queue survives a restart.
+    pub fn records(&self) -> Vec<JobRecord> {
+        self.lock()
+            .jobs
+            .iter()
+            .map(|j| JobRecord {
+                spec: j.spec.clone(),
+                // A running job continues next time.
+                state: if j.state == JobState::Downloading { JobState::Queued } else { j.state.clone() },
+                name: j.name.clone(),
+                total: j.total,
+                downloaded: j.downloaded,
+                path: j.path.clone(),
+            })
+            .collect()
+    }
+
+    /// Restores saved jobs. Queued ones start when `start` is true, otherwise
+    /// they come back paused.
+    pub fn restore(&self, records: Vec<JobRecord>, start: bool) {
+        {
+            let mut inner = self.lock();
+            for record in records {
+                let id = inner.next_id;
+                inner.next_id += 1;
+                let mut job = Job::new(id, record.spec);
+                job.state = match record.state {
+                    JobState::Queued | JobState::Downloading if !start => JobState::Paused,
+                    JobState::Downloading => JobState::Queued,
+                    other => other,
+                };
+                job.name = record.name.or(job.name);
+                job.total = record.total;
+                job.downloaded = record.downloaded;
+                job.path = record.path;
+                if let Some(package) = &job.spec.package {
+                    if job.state == JobState::Finished {
+                        // Do not report old packages again.
+                        inner.reported.insert(package.clone());
+                    }
+                }
+                inner.jobs.push(job);
+            }
+        }
+        self.schedule();
     }
 
     /// Stops every running download, saving progress, and waits for them.
@@ -273,8 +465,8 @@ impl DownloadManager {
                 .jobs
                 .iter_mut()
                 .filter_map(|job| {
-                    if let Some(control) = &job.control {
-                        control.cancel();
+                    if let Some(slot) = &job.slot {
+                        slot.cancel();
                     }
                     job.waiter.take()
                 })
@@ -291,6 +483,8 @@ impl DownloadManager {
         let running = inner.jobs.iter().filter(|j| j.state == JobState::Downloading).count();
         let mut free = inner.config.max_parallel.saturating_sub(running);
         let config = inner.config.clone();
+        let video = inner.video.clone();
+        let resolver = inner.resolver.clone();
         for job in inner.jobs.iter_mut() {
             if free == 0 {
                 break;
@@ -299,33 +493,41 @@ impl DownloadManager {
                 continue;
             }
             free -= 1;
-            let mut request = DownloadRequest::new(job.url.clone(), job.dest_dir.clone())
-                .connections(if config.multi_connection { config.connections } else { 1 })
-                .resume(config.resume);
-            if let Some(name) = &job.name {
-                request = request.file_name(name.clone());
-            }
-            let _guard = self.runtime.enter();
-            let task = self.engine.start(request);
+            let slot = Arc::new(ControlSlot::default());
+            let future = match &job.spec.kind {
+                JobKind::Http => run_http(self.engine.clone(), resolver.clone(), job.spec.clone(), config.clone(), slot.clone()),
+                JobKind::Video { format } => match &video {
+                    Some(backend) => backend.run(
+                        job.spec.url.clone(),
+                        format.clone(),
+                        job.spec.dest_dir.clone(),
+                        self.engine.speed_limit(),
+                        slot.clone(),
+                    ),
+                    None => Box::pin(async {
+                        Err(RunError::Failed("turn on the video module and install yt-dlp in Settings".to_owned()))
+                    }),
+                },
+            };
             job.generation += 1;
             job.state = JobState::Downloading;
-            job.control = Some(task.control());
+            job.slot = Some(slot);
             job.last_sample = None;
             job.speed = 0.0;
             let (id, generation, manager) = (job.id, job.generation, self.clone());
             job.waiter = Some(self.runtime.spawn(async move {
-                let result = task.wait().await;
+                let result = future.await;
                 manager.finish(id, generation, result);
             }));
         }
     }
 
-    fn finish(&self, id: JobId, generation: u64, result: bd_net::Result<PathBuf>) {
+    fn finish(&self, id: JobId, generation: u64, result: RunResult) {
         {
             let mut inner = self.lock();
+            let inner = &mut *inner;
             let Some(job) = inner.jobs.iter_mut().find(|j| j.id == id && j.generation == generation) else { return };
-            if let Some(control) = job.control.take() {
-                let p = control.progress();
+            if let Some(p) = job.slot.take().and_then(|s| s.progress()) {
                 job.name = p.file_name.or(job.name.take());
                 job.total = p.total;
                 job.downloaded = p.downloaded;
@@ -334,27 +536,76 @@ impl DownloadManager {
             job.connections = 0;
             job.speed = 0.0;
             job.waiter = None;
+            inner.revision += 1;
             match result {
                 Ok(path) => {
                     job.name = path.file_name().map(|n| n.to_string_lossy().into_owned()).or(job.name.take());
-                    job.path = Some(path);
+                    job.path = Some(path.clone());
                     job.state = JobState::Finished;
+                    let _ = inner.events.send(ManagerEvent::JobFinished { id, name: job.display_name(), path });
+                    if let Some(package) = job.spec.package.clone() {
+                        report_package(inner, &package);
+                    }
                 }
                 // Paused by the user: keep the state. Cancelled otherwise
                 // (shutdown): queue it again for next time.
-                Err(NetError::Cancelled) => {
+                Err(RunError::Cancelled) => {
                     if job.state == JobState::Downloading {
                         job.state = JobState::Queued;
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, url = %job.url, "download failed");
-                    job.state = JobState::Failed(e.to_string());
+                Err(RunError::Failed(error)) => {
+                    tracing::warn!(error = %error, url = %job.spec.url, "download failed");
+                    let _ = inner.events.send(ManagerEvent::JobFailed { id, name: job.display_name(), error: error.clone() });
+                    job.state = JobState::Failed(error);
                 }
             }
         }
         self.schedule();
     }
+}
+
+fn report_package(inner: &mut Inner, package: &str) {
+    if inner.reported.contains(package) {
+        return;
+    }
+    let members: Vec<&Job> = inner.jobs.iter().filter(|j| j.spec.package.as_deref() == Some(package)).collect();
+    if members.is_empty() || !members.iter().all(|j| j.state == JobState::Finished) {
+        return;
+    }
+    let dir = members[0].spec.dest_dir.clone();
+    let password = members.iter().find_map(|j| j.spec.password.clone());
+    let files = members.iter().filter_map(|j| j.path.clone()).collect();
+    inner.reported.insert(package.to_owned());
+    let _ = inner.events.send(ManagerEvent::PackageFinished { package: package.to_owned(), dir, files, password });
+}
+
+/// Resolves the link if needed, then downloads it with the HTTP engine.
+fn run_http(
+    engine: Engine,
+    resolver: Arc<dyn LinkResolver>,
+    spec: JobSpec,
+    config: ManagerConfig,
+    slot: Arc<ControlSlot>,
+) -> futures_util::future::BoxFuture<'static, RunResult> {
+    Box::pin(async move {
+        slot.set_status(Some("Resolving link…"));
+        let resolved = resolver.resolve(&spec.url).await.map_err(RunError::Failed)?;
+        slot.set_status(None);
+        if slot.is_cancelled() {
+            return Err(RunError::Cancelled);
+        }
+        let mut request = DownloadRequest::new(resolved.url, spec.dest_dir.clone())
+            .connections(if config.multi_connection { config.connections } else { 1 })
+            .resume(config.resume);
+        request.headers = resolved.headers;
+        if let Some(name) = spec.name.clone().or(resolved.file_name) {
+            request = request.file_name(name);
+        }
+        let task = engine.start(request);
+        slot.set(Arc::new(task.control()));
+        task.wait().await.map_err(RunError::from)
+    })
 }
 
 async fn delete_job_files(dir: &Path, name: Option<&str>, path: Option<&Path>) {
@@ -365,5 +616,62 @@ async fn delete_job_files(dir: &Path, name: Option<&str>, path: Option<&Path>) {
         for suffix in [".part", ".part.json"] {
             let _ = tokio::fs::remove_file(dir.join(format!("{name}{suffix}"))).await;
         }
+    }
+}
+
+/// Reads a saved queue. A missing or broken file gives an empty queue.
+pub fn load_records(path: &Path) -> Vec<JobRecord> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, path = %path.display(), "invalid queue file, starting empty");
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
+    }
+}
+
+pub fn save_records(path: &Path, records: &[JobRecord]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(records).map_err(std::io::Error::other)?)?;
+    std::fs::rename(tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_round_trip_as_json() {
+        let records = vec![
+            JobRecord {
+                spec: JobSpec {
+                    package: Some("Pack".into()),
+                    password: Some("pw".into()),
+                    ..JobSpec::http(Url::parse("https://a.example/f.rar").unwrap(), "C:/dl")
+                },
+                state: JobState::Failed("boom".into()),
+                name: Some("f.rar".into()),
+                total: Some(10),
+                downloaded: 4,
+                path: None,
+            },
+            JobRecord {
+                spec: JobSpec {
+                    kind: JobKind::Video { format: VideoFormat::MaxHeight { height: 720 } },
+                    ..JobSpec::http(Url::parse("https://youtu.be/x").unwrap(), "C:/dl")
+                },
+                state: JobState::Queued,
+                name: None,
+                total: None,
+                downloaded: 0,
+                path: None,
+            },
+        ];
+        let json = serde_json::to_string(&records).unwrap();
+        let back: Vec<JobRecord> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, records);
     }
 }
