@@ -1,0 +1,177 @@
+// Accounts: premium hoster accounts and debrid services.
+
+import { ComboBox, LineEdit, Switch, ScrollView } from "std-widgets.slint";
+import { Theme, Icons, Icon } from "theme.slint";
+import { Btn, IconBtn, Pill, HLine } from "widgets.slint";
+
+export struct AccountRow {
+    service: string,
+    service-name: string,
+    username: string,
+    kind: string,
+    status: string,
+    // 0 unknown, 1 premium, 2 free or warning, 3 error
+    status-kind: int,
+    enabled: bool,
+}
+
+export global AccountsState {
+    in property <[AccountRow]> accounts;
+    in property <[string]> services;
+    in property <[bool]> service-needs-username;
+    in property <[string]> service-secret-labels;
+    in property <[string]> service-help;
+    in-out property <int> form-service: 0;
+    in-out property <string> form-username;
+    in-out property <string> form-secret;
+    in property <string> form-message;
+    in property <bool> form-busy;
+    in property <bool> form-error;
+
+    callback add-account();
+    callback check(string, string);
+    callback remove(string, string);
+    callback set-enabled(string, string, bool);
+}
+
+export component AccountsPage inherits Rectangle {
+    ScrollView {
+        VerticalLayout {
+            padding: 24px;
+            padding-top: 18px;
+            spacing: 10px;
+            alignment: start;
+
+            Text { text: @tr("Accounts"); font-size: 22px; font-weight: 600; color: Theme.ink; }
+            Text {
+                text: @tr("With a debrid service, one account unlocks most hosters. Premium accounts use the hoster's official API. Secrets are kept in the Windows Credential Manager.");
+                color: Theme.mut;
+                wrap: word-wrap;
+            }
+
+            // Add form.
+            Rectangle {
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.ln;
+                background: Theme.win;
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+                    Text { text: @tr("Add an account"); font-weight: 600; color: Theme.ink; }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            width: 200px;
+                            Text { text: @tr("Service"); font-size: 12px; color: Theme.mut; }
+                            ComboBox { model: AccountsState.services; current-index <=> AccountsState.form-service; }
+                        }
+                        if AccountsState.service-needs-username[AccountsState.form-service]: VerticalLayout {
+                            spacing: 4px;
+                            horizontal-stretch: 1;
+                            Text { text: @tr("User name or e-mail"); font-size: 12px; color: Theme.mut; }
+                            LineEdit { text <=> AccountsState.form-username; }
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            horizontal-stretch: 1;
+                            Text { text: AccountsState.service-secret-labels[AccountsState.form-service]; font-size: 12px; color: Theme.mut; }
+                            LineEdit { input-type: password; text <=> AccountsState.form-secret; }
+                        }
+                        VerticalLayout {
+                            alignment: end;
+                            horizontal-stretch: 0;
+                            Btn {
+                                primary: true;
+                                icon: Icons.shield;
+                                text: AccountsState.form-busy ? @tr("Checking…") : @tr("Check and save");
+                                clicked => { if !AccountsState.form-busy { AccountsState.add-account(); } }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: @tr("Where to find it: {}", AccountsState.service-help[AccountsState.form-service]); font-size: 12px; color: Theme.mut; }
+                        Text {
+                            text: AccountsState.form-message;
+                            font-size: 12px;
+                            color: AccountsState.form-error ? Theme.er : Theme.ok;
+                            horizontal-stretch: 1;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+            }
+
+            // List.
+            Rectangle {
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.ln;
+                background: Theme.win;
+                clip: true;
+                VerticalLayout {
+                    Rectangle {
+                        height: 34px;
+                        background: Theme.chr;
+                        HLine { y: parent.height - 1px; }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 10px;
+                            Text { text: @tr("Service"); width: 160px; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                            Text { text: @tr("Type"); width: 90px; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                            Text { text: @tr("Account"); horizontal-stretch: 1; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                            Text { text: @tr("Status"); width: 260px; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                            Text { text: @tr("Use"); width: 60px; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                            Rectangle { width: 70px; }
+                        }
+                    }
+                    if AccountsState.accounts.length == 0: Text {
+                        text: @tr("No account yet. BDownloader works without one for direct links, Pixeldrain, Dropbox and video sites.");
+                        color: Theme.mut;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        height: 60px;
+                        vertical-alignment: center;
+                    }
+                    for a in AccountsState.accounts: Rectangle {
+                        height: 44px;
+                        HLine { y: parent.height - 1px; }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 10px;
+                            Text { text: a.service-name; width: 160px; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                            Text { text: a.kind; width: 90px; color: Theme.mut; vertical-alignment: center; }
+                            Text { text: a.username; horizontal-stretch: 1; color: Theme.ink; vertical-alignment: center; overflow: elide; }
+                            HorizontalLayout {
+                                width: 260px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Pill {
+                                        text: a.status;
+                                        tone: a.status-kind == 1 ? Theme.ok : a.status-kind == 2 ? Theme.wa : a.status-kind == 3 ? Theme.er : Theme.mut;
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                width: 60px;
+                                Switch { checked: a.enabled; toggled => { AccountsState.set-enabled(a.service, a.username, self.checked); } }
+                            }
+                            HorizontalLayout {
+                                width: 70px;
+                                spacing: 4px;
+                                VerticalLayout { alignment: center; IconBtn { icon: Icons.retry; tooltip: @tr("Check again"); clicked => { AccountsState.check(a.service, a.username); } } }
+                                VerticalLayout { alignment: center; IconBtn { icon: Icons.trash; tooltip: @tr("Remove"); clicked => { AccountsState.remove(a.service, a.username); } } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

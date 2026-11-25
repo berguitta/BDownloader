@@ -1,4 +1,4 @@
-//! Small OS integrations: open files and folders, copy to the clipboard.
+//! Small OS integrations: Explorer, clipboard, notifications.
 
 use std::path::Path;
 use std::process::Command;
@@ -30,4 +30,32 @@ pub fn copy_text(text: &str) -> bool {
             false
         }
     }
+}
+
+pub fn clipboard_text() -> Option<String> {
+    arboard::Clipboard::new().and_then(|mut c| c.get_text()).ok()
+}
+
+/// Number Windows increments on every clipboard change. Comparing it is
+/// enough to react to changes without reading the content every time.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub fn clipboard_sequence() -> u32 {
+    // SAFETY: no arguments, no pointers; documented as always safe to call.
+    unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() }
+}
+
+#[cfg(not(windows))]
+pub fn clipboard_sequence() -> u32 {
+    0
+}
+
+/// Shows a Windows notification. Never blocks the UI.
+pub fn notify(title: &str, body: &str) {
+    let (title, body) = (title.to_owned(), body.to_owned());
+    std::thread::spawn(move || {
+        if let Err(e) = notify_rust::Notification::new().appname("BDownloader").summary(&title).body(&body).show() {
+            tracing::debug!(error = %e, "notification failed");
+        }
+    });
 }

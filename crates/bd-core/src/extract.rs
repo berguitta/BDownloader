@@ -41,7 +41,12 @@ enum Failure {
 
 /// Extracts every archive of a finished package into `dir`. Blocking: run it
 /// on a blocking thread.
-pub fn extract_package(files: &[PathBuf], dir: &Path, package_password: Option<&str>, options: &ExtractOptions) -> ExtractReport {
+pub fn extract_package(
+    files: &[PathBuf],
+    dir: &Path,
+    package_password: Option<&str>,
+    options: &ExtractOptions,
+) -> ExtractReport {
     let mut candidates: Vec<Option<String>> = vec![None];
     if let Some(pw) = package_password.filter(|p| !p.is_empty()) {
         candidates.push(Some(pw.to_owned()));
@@ -101,7 +106,11 @@ fn extract_zip(archive: &Path, dir: &Path, password: Option<&str>) -> Result<usi
         }
         .map_err(|e| {
             let text = e.to_string();
-            if text.contains("assword") { Failure::WrongPassword } else { Failure::Other(text) }
+            if text.contains("assword") {
+                Failure::WrongPassword
+            } else {
+                Failure::Other(text)
+            }
         })?;
         // Refuse entries escaping the destination folder.
         let Some(relative) = entry.enclosed_name() else { continue };
@@ -116,7 +125,11 @@ fn extract_zip(archive: &Path, dir: &Path, password: Option<&str>) -> Result<usi
         let mut out = File::create(&target).map_err(|e| Failure::Other(e.to_string()))?;
         std::io::copy(&mut entry, &mut out).map_err(|e| {
             let text = e.to_string();
-            if text.contains("assword") { Failure::WrongPassword } else { Failure::Other(text) }
+            if text.contains("assword") {
+                Failure::WrongPassword
+            } else {
+                Failure::Other(text)
+            }
         })?;
         count += 1;
     }
@@ -132,7 +145,11 @@ fn extract_7z(archive: &Path, dir: &Path, password: Option<&str>) -> Result<usiz
         Ok(()) => Ok(count_files(dir)),
         Err(e) => {
             let text = e.to_string();
-            if text.to_ascii_lowercase().contains("password") { Err(Failure::WrongPassword) } else { Err(Failure::Other(text)) }
+            if text.to_ascii_lowercase().contains("password") {
+                Err(Failure::WrongPassword)
+            } else {
+                Err(Failure::Other(text))
+            }
         }
     }
 }
@@ -197,7 +214,7 @@ mod tests {
             zip.finish().unwrap();
         }
         let options = ExtractOptions { passwords: vec![], delete_archives: true };
-        let report = extract_package(&[archive.clone()], &dir, None, &options);
+        let report = extract_package(std::slice::from_ref(&archive), &dir, None, &options);
         assert_eq!(report.results[0].outcome, Ok(2));
         assert_eq!(std::fs::read_to_string(dir.join("sub").join("world.txt")).unwrap(), "world");
         assert_eq!(report.deleted, 1);

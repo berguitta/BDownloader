@@ -122,7 +122,12 @@ impl HosterResolver {
         if !self.modules.read().unwrap_or_else(|e| e.into_inner()).contains(module) {
             return None;
         }
-        self.credentials.read().unwrap_or_else(|e| e.into_inner()).iter().find(|(a, _)| a.service == service_id).cloned()
+        self.credentials
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(a, _)| a.service == service_id)
+            .cloned()
     }
 
     async fn resolve_inner(&self, url: &Url) -> Result<Resolved, String> {
@@ -189,16 +194,17 @@ impl HosterResolver {
 
     async fn alldebrid(&self, url: &Url, key: &str) -> Result<Resolved, String> {
         let body = self
-            .json(
-                self.client
-                    .get("https://api.alldebrid.com/v4/link/unlock")
-                    .query(&[("agent", AGENT), ("apikey", key), ("link", url.as_str())]),
-            )
+            .json(self.client.get("https://api.alldebrid.com/v4/link/unlock").query(&[
+                ("agent", AGENT),
+                ("apikey", key),
+                ("link", url.as_str()),
+            ]))
             .await?;
         if body["status"] != "success" {
             return Err(api_error(&body["error"], "message"));
         }
-        let link = body["data"]["link"].as_str().filter(|l| !l.is_empty()).ok_or("AllDebrid is still preparing this link")?;
+        let link =
+            body["data"]["link"].as_str().filter(|l| !l.is_empty()).ok_or("AllDebrid is still preparing this link")?;
         Ok(Resolved {
             url: Url::parse(link).map_err(|e| e.to_string())?,
             headers: Vec::new(),
@@ -257,7 +263,11 @@ impl HosterResolver {
             .path_segments()
             .and_then(|mut s| {
                 let first = s.next()?;
-                if first == "file" { s.next() } else { Some(first) }
+                if first == "file" {
+                    s.next()
+                } else {
+                    Some(first)
+                }
             })
             .filter(|id| !id.is_empty())
             .ok_or("this is not a Rapidgator file link")?
@@ -274,7 +284,10 @@ impl HosterResolver {
                     )
                     .await?;
                 let token = body["response"]["token"].as_str().ok_or_else(|| api_error(&body, "details"))?.to_owned();
-                self.rapidgator_tokens.lock().unwrap_or_else(|e| e.into_inner()).insert(login.to_owned(), token.clone());
+                self.rapidgator_tokens
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(login.to_owned(), token.clone());
                 token
             }
         };
@@ -311,7 +324,11 @@ impl HosterResolver {
             }
             "alldebrid" => {
                 let body = self
-                    .json(self.client.get("https://api.alldebrid.com/v4/user").query(&[("agent", AGENT), ("apikey", secret)]))
+                    .json(
+                        self.client
+                            .get("https://api.alldebrid.com/v4/user")
+                            .query(&[("agent", AGENT), ("apikey", secret)]),
+                    )
                     .await?;
                 if body["status"] != "success" {
                     return Err(api_error(&body["error"], "message"));

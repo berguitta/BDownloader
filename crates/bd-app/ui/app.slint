@@ -4,20 +4,11 @@ import { ComboBox, TextEdit, Palette } from "std-widgets.slint";
 import { Theme, Icons, Icon } from "theme.slint";
 import { Btn, IconBtn, NavItem, HLine } from "widgets.slint";
 import { DownloadsPage, DownloadsState, JobRow, KeyValue, Connection } from "downloads.slint";
+import { GrabberPage, GrabberState, GrabRow } from "grabber.slint";
+import { AccountsPage, AccountsState, AccountRow } from "accounts.slint";
 import { SettingsPage, SettingsState, ModuleRow } from "settings.slint";
 
-export { DownloadsState, JobRow, KeyValue, Connection, SettingsState, ModuleRow }
-
-component PlaceholderPage inherits Rectangle {
-    in property <string> title;
-    in property <string> text;
-    VerticalLayout {
-        alignment: center;
-        spacing: 8px;
-        Text { text: root.title; font-size: 20px; font-weight: 600; horizontal-alignment: center; color: Theme.ink; }
-        Text { text: root.text; horizontal-alignment: center; color: Theme.mut; wrap: word-wrap; }
-    }
-}
+export { DownloadsState, JobRow, KeyValue, Connection, SettingsState, ModuleRow, GrabberState, GrabRow, AccountsState, AccountRow }
 
 component AddLinksDialog inherits Rectangle {
     in-out property <string> text;
@@ -44,9 +35,9 @@ component AddLinksDialog inherits Rectangle {
         VerticalLayout {
             padding: 16px;
             spacing: 10px;
-            Text { text: "Add links"; font-size: 17px; font-weight: 600; color: Theme.ink; }
+            Text { text: @tr("Add links"); font-size: 17px; font-weight: 600; color: Theme.ink; }
             Text {
-                text: "Paste links, a list, or any text containing links: BDownloader finds them.";
+                text: @tr("Paste links, a list, or any text containing links: BDownloader finds them.");
                 color: Theme.mut;
                 wrap: word-wrap;
             }
@@ -58,13 +49,13 @@ component AddLinksDialog inherits Rectangle {
             HorizontalLayout {
                 spacing: 8px;
                 Text {
-                    text: root.detected == 0 ? "No link detected yet" : root.detected == 1 ? "1 link detected" : root.detected + " links detected";
+                    text: root.detected == 0 ? @tr("No link detected yet") : @tr("{n} link detected" | "{n} links detected" % root.detected);
                     color: root.detected > 0 ? Theme.ok : Theme.mut;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
-                Btn { text: "Cancel"; clicked => { root.cancel(); } }
-                Btn { primary: true; icon: Icons.plus; text: root.detected > 1 ? "Add " + root.detected + " links" : "Add"; clicked => { root.confirm(root.text); } }
+                Btn { text: @tr("Cancel"); clicked => { root.cancel(); } }
+                Btn { primary: true; icon: Icons.plus; text: root.detected > 1 ? @tr("Add {} links", root.detected) : @tr("Add"); clicked => { root.confirm(root.text); } }
             }
         }
     }
@@ -73,6 +64,7 @@ component AddLinksDialog inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "BDownloader";
+    icon: @image-url("../../../assets/logo-64.png");
     preferred-width: 1360px;
     preferred-height: 820px;
     min-width: 900px;
@@ -83,6 +75,7 @@ export component AppWindow inherits Window {
 
     in-out property <int> page: 0;
     in property <string> nav-badge;
+    in property <string> grab-badge;
     in property <string> status-down;
     in property <string> status-active;
     in property <string> status-queued;
@@ -126,23 +119,17 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     VerticalLayout {
                         alignment: center;
-                        Rectangle {
-                            width: 22px;
-                            height: 22px;
-                            border-radius: 6px;
-                            background: Theme.acc;
-                            Icon { width: 14px; height: 14px; commands: Icons.dl; stroke: white; stroke-width: 2.6px; }
-                        }
+                        Image { width: 24px; height: 24px; source: @image-url("../../../assets/logo-64.png"); }
                     }
                     Text { text: "BDownloader"; font-size: 15px; font-weight: 700; vertical-alignment: center; color: Theme.ink; }
                 }
-                Text { text: "v0.1 preview"; font-size: 12px; color: Theme.mut; vertical-alignment: center; }
+                Text { text: @tr("v0.1 preview"); font-size: 12px; color: Theme.mut; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; }
                 VerticalLayout {
                     alignment: center;
                     IconBtn {
                         size: 32px;
-                        tooltip: Theme.dark ? "Switch to light theme" : "Switch to dark theme";
+                        tooltip: Theme.dark ? @tr("Switch to light theme") : @tr("Switch to dark theme");
                         icon: Theme.dark ? Icons.sun : Icons.moon;
                         clicked => {
                             SettingsState.theme-mode = Theme.dark ? 1 : 2;
@@ -166,25 +153,17 @@ export component AppWindow inherits Window {
                     padding: 8px;
                     padding-top: 10px;
                     spacing: 2px;
-                    NavItem { icon: Icons.dl; text: "Downloads"; badge: root.nav-badge; active: root.page == 0; clicked => { root.page = 0; } }
-                    NavItem { icon: Icons.link; text: "Link grabber"; active: root.page == 1; clicked => { root.page = 1; } }
-                    NavItem { icon: Icons.key; text: "Accounts"; active: root.page == 2; clicked => { root.page = 2; } }
-                    NavItem { icon: Icons.gear; text: "Settings"; active: root.page == 3; clicked => { root.page = 3; } }
+                    NavItem { icon: Icons.dl; text: @tr("Downloads"); badge: root.nav-badge; active: root.page == 0; clicked => { root.page = 0; } }
+                    NavItem { icon: Icons.link; text: @tr("Link grabber"); badge: root.grab-badge; active: root.page == 1; clicked => { root.page = 1; } }
+                    NavItem { icon: Icons.key; text: @tr("Accounts"); active: root.page == 2; clicked => { root.page = 2; } }
+                    NavItem { icon: Icons.gear; text: @tr("Settings"); active: root.page == 3; clicked => { root.page = 3; } }
                     Rectangle { vertical-stretch: 1; }
                 }
             }
 
             if root.page == 0: DownloadsPage { horizontal-stretch: 1; }
-            if root.page == 1: PlaceholderPage {
-                horizontal-stretch: 1;
-                title: "Link grabber";
-                text: "Coming next: clipboard watching, link checking and pools of files with mirrors.\nFor now, use Add links on the Downloads screen.";
-            }
-            if root.page == 2: PlaceholderPage {
-                horizontal-stretch: 1;
-                title: "Accounts";
-                text: "Coming with the first hoster modules: premium accounts and debrid services.";
-            }
+            if root.page == 1: GrabberPage { horizontal-stretch: 1; }
+            if root.page == 2: AccountsPage { horizontal-stretch: 1; }
             if root.page == 3: SettingsPage { horizontal-stretch: 1; }
         }
 
@@ -197,11 +176,11 @@ export component AppWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 12px;
                 spacing: 16px;
-                HorizontalLayout { spacing: 4px; Text { text: "Down"; font-size: 12.5px; color: Theme.mut; vertical-alignment: center; } Text { text: root.status-down; font-size: 12.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; } }
-                HorizontalLayout { spacing: 4px; Text { text: "Active"; font-size: 12.5px; color: Theme.mut; vertical-alignment: center; } Text { text: root.status-active; font-size: 12.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; } }
-                HorizontalLayout { spacing: 4px; Text { text: "Queued"; font-size: 12.5px; color: Theme.mut; vertical-alignment: center; } Text { text: root.status-queued; font-size: 12.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; } }
+                HorizontalLayout { spacing: 4px; Text { text: @tr("Down"); font-size: 12.5px; color: Theme.mut; vertical-alignment: center; } Text { text: root.status-down; font-size: 12.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; } }
+                HorizontalLayout { spacing: 4px; Text { text: @tr("Active"); font-size: 12.5px; color: Theme.mut; vertical-alignment: center; } Text { text: root.status-active; font-size: 12.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; } }
+                HorizontalLayout { spacing: 4px; Text { text: @tr("Queued"); font-size: 12.5px; color: Theme.mut; vertical-alignment: center; } Text { text: root.status-queued; font-size: 12.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; } }
                 Rectangle { horizontal-stretch: 1; }
-                HorizontalLayout { spacing: 4px; Text { text: "Saving to"; font-size: 12.5px; color: Theme.mut; vertical-alignment: center; } Text { text: root.status-folder; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; overflow: elide; } }
+                HorizontalLayout { spacing: 4px; Text { text: @tr("Saving to"); font-size: 12.5px; color: Theme.mut; vertical-alignment: center; } Text { text: root.status-folder; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; overflow: elide; } }
             }
         }
     }

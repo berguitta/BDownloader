@@ -103,7 +103,8 @@ pub const BUILTIN_MODULES: &[ModuleInfo] = &[
     ModuleInfo {
         id: "clipboard",
         name: "Clipboard watcher",
-        description: "Links you copy appear in the link grabber. Reacts to clipboard changes, no polling of the content.",
+        description:
+            "Links you copy appear in the link grabber. Reacts to clipboard changes, no polling of the content.",
         category: Category::LinkSource,
         status: ModuleStatus::Available,
         default_enabled: true,

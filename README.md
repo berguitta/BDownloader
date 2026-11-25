@@ -3,9 +3,9 @@
 A fast, native download manager written in Rust. No Java, no Python, no web
 server, no browser extension required: one small executable.
 
-> **Status: early preview (v0.1).** Direct HTTP/HTTPS links work end to end.
-> Hoster modules (1fichier, Rapidgator…), debrid services, the link grabber,
-> torrents, videos and extraction are on the roadmap.
+> **Status: early preview (v0.1).** Direct links, the link grabber, debrid
+> and premium APIs, video sites and extraction are in. Free mode for hosters
+> (wait timers) and torrents are on the roadmap.
 
 ## Features
 
@@ -18,8 +18,21 @@ server, no browser extension required: one small executable.
   server answers `429 Too Many Requests` or `503`.
 - **Modules everywhere**: every feature is a module you can turn on or off in
   Settings; dependencies are handled for you.
-- **Light and dark themes**, or follow the Windows setting.
-- **Paste anything**: the Add links dialog finds every link in a block of text.
+- **Link grabber**: links from the clipboard, a paste or Click'n'Load are
+  checked online, grouped into packages with their mirrors, and start only
+  when you pick them. A web page link becomes a pool of the files it lists.
+- **Hosters**: Real-Debrid, AllDebrid and Premiumize unlock most hosters;
+  1fichier and Rapidgator premium through their official APIs; free direct
+  links from Pixeldrain and Dropbox. Secrets live in the Windows Credential
+  Manager.
+- **Video sites** through yt-dlp (installed on demand): pick the quality, or
+  audio only (original or MP3 with ffmpeg).
+- **Automatic extraction** of ZIP, 7z and RAR (multi-part) packages with the
+  package password and your password list.
+- **Tray icon** with a quick menu (pause, speed limit, clipboard), close or
+  minimize to the tray, Windows notifications.
+- **Saved queue**: downloads come back after a restart.
+- **Light and dark themes**, English and French interface (more coming).
 
 ## Workspace
 

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/bd-net", "crates/bd-core", "crates/bd-cli", "crates/bd-app"]
+members = ["crates/bd-net", "crates/bd-core", "crates/bd-cli", "crates/bd-app", "xtask"]
 # Local, unpublished UI experiments live in their own workspace.
 exclude = ["prototypes"]
 

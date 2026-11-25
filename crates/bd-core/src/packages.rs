@@ -6,8 +6,8 @@ use url::Url;
 const ARCHIVE_EXTENSIONS: &[&str] = &["rar", "zip", "7z", "tar", "gz", "tgz", "bz2", "xz"];
 
 const FILE_EXTENSIONS: &[&str] = &[
-    "rar", "zip", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso", "img", "dmg", "exe", "msi", "apk", "pdf", "epub", "mp4",
-    "mkv", "avi", "mov", "webm", "mp3", "flac", "wav", "ogg", "m4a", "jpg", "png", "bin", "dat", "deb", "rpm",
+    "rar", "zip", "7z", "tar", "gz", "tgz", "bz2", "xz", "iso", "img", "dmg", "exe", "msi", "apk", "pdf", "epub",
+    "mp4", "mkv", "avi", "mov", "webm", "mp3", "flac", "wav", "ogg", "m4a", "jpg", "png", "bin", "dat", "deb", "rpm",
 ];
 
 /// Lower-cased extension chain, e.g. `["part01", "rar"]` for `x.part01.rar`.
@@ -39,7 +39,11 @@ pub fn package_name(file_name: &str) -> String {
         base = stem.to_owned();
     }
     let trimmed = base.trim_matches(|c: char| c == '.' || c == '_' || c == '-' || c.is_whitespace());
-    if trimmed.is_empty() { file_name.to_owned() } else { trimmed.to_owned() }
+    if trimmed.is_empty() {
+        file_name.to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 /// Whether the file is the volume an extractor should open (the first part
@@ -125,7 +129,9 @@ fn is_wanted(url: &Url) -> bool {
     let path = url.path().to_ascii_lowercase();
     let name = path.rsplit('/').next().unwrap_or_default();
     match name.rsplit_once('.') {
-        Some((_, ext)) => FILE_EXTENSIONS.contains(&ext) || is_digits(ext) && name.contains(".7z.") || name.contains(".zip."),
+        Some((_, ext)) => {
+            FILE_EXTENSIONS.contains(&ext) || is_digits(ext) && name.contains(".7z.") || name.contains(".zip.")
+        }
         None => false,
     }
 }

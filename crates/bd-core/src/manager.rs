@@ -116,10 +116,23 @@ pub struct JobRecord {
 /// Something the application may want to react to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ManagerEvent {
-    JobFinished { id: JobId, name: String, path: PathBuf },
-    JobFailed { id: JobId, name: String, error: String },
+    JobFinished {
+        id: JobId,
+        name: String,
+        path: PathBuf,
+    },
+    JobFailed {
+        id: JobId,
+        name: String,
+        error: String,
+    },
     /// Every file of a package is finished.
-    PackageFinished { package: String, dir: PathBuf, files: Vec<PathBuf>, password: Option<String> },
+    PackageFinished {
+        package: String,
+        dir: PathBuf,
+        files: Vec<PathBuf>,
+        password: Option<String>,
+    },
 }
 
 /// Queue settings, usually derived from [`crate::Settings`] and modules.
@@ -495,7 +508,9 @@ impl DownloadManager {
             free -= 1;
             let slot = Arc::new(ControlSlot::default());
             let future = match &job.spec.kind {
-                JobKind::Http => run_http(self.engine.clone(), resolver.clone(), job.spec.clone(), config.clone(), slot.clone()),
+                JobKind::Http => {
+                    run_http(self.engine.clone(), resolver.clone(), job.spec.clone(), config.clone(), slot.clone())
+                }
                 JobKind::Video { format } => match &video {
                     Some(backend) => backend.run(
                         job.spec.url.clone(),
@@ -556,7 +571,11 @@ impl DownloadManager {
                 }
                 Err(RunError::Failed(error)) => {
                     tracing::warn!(error = %error, url = %job.spec.url, "download failed");
-                    let _ = inner.events.send(ManagerEvent::JobFailed { id, name: job.display_name(), error: error.clone() });
+                    let _ = inner.events.send(ManagerEvent::JobFailed {
+                        id,
+                        name: job.display_name(),
+                        error: error.clone(),
+                    });
                     job.state = JobState::Failed(error);
                 }
             }

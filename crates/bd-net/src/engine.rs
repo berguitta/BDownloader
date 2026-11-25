@@ -16,8 +16,8 @@ use url::Url;
 
 use crate::name::sanitize_file_name;
 use crate::probe::{probe, RemoteFile};
-use crate::state::{self, ResumeState, Segment, STATE_VERSION};
 use crate::rate::RateLimiter;
+use crate::state::{self, ResumeState, Segment, STATE_VERSION};
 use crate::{Error, Result};
 
 const DEFAULT_MIN_SEGMENT: u64 = 1024 * 1024;
@@ -42,7 +42,14 @@ pub struct DownloadRequest {
 
 impl DownloadRequest {
     pub fn new(url: Url, dest_dir: impl Into<PathBuf>) -> Self {
-        DownloadRequest { url, dest_dir: dest_dir.into(), file_name: None, connections: 8, resume: true, headers: Vec::new() }
+        DownloadRequest {
+            url,
+            dest_dir: dest_dir.into(),
+            file_name: None,
+            connections: 8,
+            resume: true,
+            headers: Vec::new(),
+        }
     }
 
     pub fn resume(mut self, resume: bool) -> Self {

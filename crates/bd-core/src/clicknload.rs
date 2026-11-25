@@ -89,7 +89,8 @@ async fn handle(mut socket: TcpStream, on_links: OnLinks) -> std::io::Result<()>
         ("GET", "/jdcheck.js") => ("text/javascript", "jdownloader=true;\nvar version='18507';\n".to_owned()),
         ("GET", "/crossdomain.xml") => (
             "text/xml",
-            "<?xml version=\"1.0\"?>\n<cross-domain-policy><allow-access-from domain=\"*\" /></cross-domain-policy>\n".to_owned(),
+            "<?xml version=\"1.0\"?>\n<cross-domain-policy><allow-access-from domain=\"*\" /></cross-domain-policy>\n"
+                .to_owned(),
         ),
         ("GET", "" | "/flash") => ("text/plain", "JDownloader\r\n".to_owned()),
         ("POST", "/flash/add" | "/flash/addcnl") => {
@@ -137,10 +138,9 @@ fn field(form: &[(String, String)], key: &str) -> String {
 /// `jk` is a small JavaScript function returning the key as 32 hex digits,
 /// e.g. `function f(){ return '31323334...';}`. The key is also the IV.
 fn decrypt(crypted: &str, jk: &str) -> Option<String> {
-    let key_hex = jk
-        .split(['\'', '"'])
-        .find(|s| s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()))?;
-    let key: Vec<u8> = (0..16).map(|i| u8::from_str_radix(&key_hex[i * 2..i * 2 + 2], 16)).collect::<Result<_, _>>().ok()?;
+    let key_hex = jk.split(['\'', '"']).find(|s| s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()))?;
+    let key: Vec<u8> =
+        (0..16).map(|i| u8::from_str_radix(&key_hex[i * 2..i * 2 + 2], 16)).collect::<Result<_, _>>().ok()?;
     let mut data = base64::engine::general_purpose::STANDARD.decode(crypted.trim().replace(' ', "+")).ok()?;
     let data_len = data.len() - data.len() % 16;
     data.truncate(data_len);
@@ -188,7 +188,8 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         let client = reqwest::Client::new();
-        let check = client.get(format!("http://127.0.0.1:{port}/jdcheck.js")).send().await.unwrap().text().await.unwrap();
+        let check =
+            client.get(format!("http://127.0.0.1:{port}/jdcheck.js")).send().await.unwrap().text().await.unwrap();
         assert!(check.contains("jdownloader=true"));
         let reply = client
             .post(format!("http://127.0.0.1:{port}/flash/add"))

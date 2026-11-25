@@ -114,7 +114,8 @@ impl Grabber {
                 }
                 let id = inner.next_id;
                 inner.next_id += 1;
-                let name = bd_net::file_name_from_url(&url).unwrap_or_else(|| url.host_str().unwrap_or("link").to_owned());
+                let name =
+                    bd_net::file_name_from_url(&url).unwrap_or_else(|| url.host_str().unwrap_or("link").to_owned());
                 inner.links.push(GrabbedLink {
                     id,
                     package: package_name(&name),
@@ -342,8 +343,11 @@ impl Grabber {
             if !link.selected || matches!(link.status, LinkStatus::Offline(_) | LinkStatus::Checking) {
                 continue;
             }
-            let dir: PathBuf =
-                if counts(&link.package, &inner.links) > 1 { root.join(sanitize_file_name(&link.package)) } else { root.to_path_buf() };
+            let dir: PathBuf = if counts(&link.package, &inner.links) > 1 {
+                root.join(sanitize_file_name(&link.package))
+            } else {
+                root.to_path_buf()
+            };
             let kind = match &link.video {
                 Some(info) => JobKind::Video { format: info.choices[link.video_choice].format.clone() },
                 None => JobKind::Http,

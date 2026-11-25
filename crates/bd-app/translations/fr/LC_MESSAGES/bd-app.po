@@ -1,0 +1,352 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: fr\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "{n} link detected"
+msgid_plural "{n} links detected"
+msgstr[0] "{n} lien détecté"
+msgstr[1] "{n} liens détectés"
+
+msgid "Account"
+msgstr "Compte"
+
+msgid "Accounts"
+msgstr "Comptes"
+
+msgid "Active"
+msgstr "Actifs"
+
+msgid "Add"
+msgstr "Ajouter"
+
+msgid "Add {} links"
+msgstr "Ajouter {} liens"
+
+msgid "Add an account"
+msgstr "Ajouter un compte"
+
+msgid "Add links"
+msgstr "Ajouter des liens"
+
+msgid "All"
+msgstr "Tous"
+
+msgid "APPEARANCE"
+msgstr "APPARENCE"
+
+msgid "Archive password"
+msgstr "Mot de passe d'archive"
+
+msgid "Archive passwords"
+msgstr "Mots de passe d'archives"
+
+msgid "Cancel"
+msgstr "Annuler"
+
+msgid "Check again"
+msgstr "Vérifier à nouveau"
+
+msgid "Check and save"
+msgstr "Vérifier et enregistrer"
+
+msgid "Checking…"
+msgstr "Vérification…"
+
+msgid "Clear"
+msgstr "Vider"
+
+msgid "Click Add links and paste one or more links, or a whole block of text."
+msgstr "Cliquez sur Ajouter des liens et collez un ou plusieurs liens, ou tout un bloc de texte."
+
+msgid "Click'n'Load"
+msgstr "Click'n'Load"
+
+msgid "Closing the window keeps BDownloader in the tray"
+msgstr "Fermer la fenêtre garde BDownloader dans la zone de notification"
+
+msgid "Connections per download"
+msgstr "Connexions par téléchargement"
+
+msgid "Copy link"
+msgstr "Copier le lien"
+
+msgid "Copy links anywhere, paste a block of text, or use Click'n'Load: they appear here, checked and grouped."
+msgstr "Copiez des liens n'importe où, collez un bloc de texte ou utilisez Click'n'Load : ils arrivent ici, vérifiés et regroupés."
+
+msgid "Dark"
+msgstr "Sombre"
+
+msgid "Delete archives after a successful extraction"
+msgstr "Supprimer les archives après une extraction réussie"
+
+msgid "Delete with files"
+msgstr "Supprimer avec les fichiers"
+
+msgid "Down"
+msgstr "Débit"
+
+msgid "Download folder"
+msgstr "Dossier de téléchargement"
+
+msgid "Downloads"
+msgstr "Téléchargements"
+
+msgid "Downloads continue in the background. Quit from the tray menu."
+msgstr "Les téléchargements continuent en arrière-plan. Quittez depuis le menu de l'icône."
+
+msgid "Errors"
+msgstr "Erreurs"
+
+msgid "ETA"
+msgstr "Reste"
+
+msgid "Everything is optional: turn modules on or off, BDownloader only loads what you use."
+msgstr "Tout est optionnel : activez ou désactivez les modules, BDownloader ne charge que ce que vous utilisez."
+
+msgid "Expand"
+msgstr "Déplier"
+
+msgid "EXTRACTION"
+msgstr "EXTRACTION"
+
+msgid "Filter by name or hoster"
+msgstr "Filtrer par nom ou hébergeur"
+
+msgid "Finished"
+msgstr "Terminés"
+
+msgid "Follow Windows"
+msgstr "Comme Windows"
+
+msgid "GENERAL"
+msgstr "GÉNÉRAL"
+
+msgid "Hoster"
+msgstr "Hébergeur"
+
+msgid "Hoster · password"
+msgstr "Hébergeur · mot de passe"
+
+msgid "How many files download at the same time."
+msgstr "Nombre de fichiers téléchargés en même temps."
+
+msgid "In KiB/s for all downloads together. 0 means unlimited (speed-limit module)."
+msgstr "En Kio/s pour tous les téléchargements ensemble. 0 = illimité (module limite de débit)."
+
+msgid "Install"
+msgstr "Installer"
+
+msgid "Interface language. More languages are being added."
+msgstr "Langue de l'interface. D'autres langues arrivent."
+
+msgid "Language"
+msgstr "Langue"
+
+msgid "last 60 s"
+msgstr "60 dernières s"
+
+msgid "Light"
+msgstr "Clair"
+
+msgid "Light, dark, or follow the Windows setting."
+msgstr "Clair, sombre, ou comme le réglage de Windows."
+
+msgid "Link grabber"
+msgstr "Capture de liens"
+
+msgid "Minimizing the window hides it to the tray"
+msgstr "Réduire la fenêtre la cache dans la zone de notification"
+
+msgid "MODULES"
+msgstr "MODULES"
+
+msgid "Name"
+msgstr "Nom"
+
+msgid "Needed for YouTube and other video sites. Downloaded from its official GitHub releases."
+msgstr "Nécessaire pour YouTube et les autres sites vidéo. Téléchargé depuis ses versions officielles sur GitHub."
+
+msgid "New downloads are saved here. Packages with several files get a sub-folder."
+msgstr "Les nouveaux téléchargements sont enregistrés ici. Les paquets de plusieurs fichiers ont leur sous-dossier."
+
+msgid "No account yet. BDownloader works without one for direct links, Pixeldrain, Dropbox and video sites."
+msgstr "Aucun compte pour l'instant. BDownloader fonctionne sans compte pour les liens directs, Pixeldrain, Dropbox et les sites vidéo."
+
+msgid "No downloads yet"
+msgstr "Aucun téléchargement pour l'instant"
+
+msgid "No link detected yet"
+msgstr "Aucun lien détecté pour l'instant"
+
+msgid "One per line, tried in order after the package password."
+msgstr "Un par ligne, essayés dans l'ordre après le mot de passe du paquet."
+
+msgid "Open file"
+msgstr "Ouvrir le fichier"
+
+msgid "Open folder"
+msgstr "Ouvrir le dossier"
+
+msgid "Optional: best quality (video and audio merged) and MP3 conversion. About 100 MB."
+msgstr "Optionnel : meilleure qualité (vidéo et audio fusionnés) et conversion MP3. Environ 100 Mo."
+
+msgid "Otherwise the saved queue comes back paused."
+msgstr "Sinon, la file enregistrée revient en pause."
+
+msgid "Package / file"
+msgstr "Paquet / fichier"
+
+msgid "Parallel"
+msgstr "En parallèle"
+
+msgid "Parallel downloads"
+msgstr "Téléchargements en parallèle"
+
+msgid "Paste links, a list, or any text containing links: BDownloader finds them."
+msgstr "Collez des liens, une liste ou n'importe quel texte qui en contient : BDownloader les trouve."
+
+msgid "Pause"
+msgstr "Pause"
+
+msgid "Pause all"
+msgstr "Tout en pause"
+
+msgid "Paused"
+msgstr "En pause"
+
+msgid "Planned"
+msgstr "Prévu"
+
+msgid "Progress"
+msgstr "Progression"
+
+msgid "Queued"
+msgstr "En attente"
+
+msgid "Reinstall"
+msgstr "Réinstaller"
+
+msgid "Remove"
+msgstr "Retirer"
+
+msgid "Remove from list"
+msgstr "Retirer de la liste"
+
+msgid "Remove link"
+msgstr "Retirer le lien"
+
+msgid "Remove offline"
+msgstr "Retirer les hors ligne"
+
+msgid "Remove package"
+msgstr "Retirer le paquet"
+
+msgid "Resume"
+msgstr "Reprendre"
+
+msgid "Retry"
+msgstr "Réessayer"
+
+msgid "Saving to"
+msgstr "Enregistrement dans"
+
+msgid "Select all"
+msgstr "Tout cocher"
+
+msgid "Select none"
+msgstr "Tout décocher"
+
+msgid "Service"
+msgstr "Service"
+
+msgid "Settings"
+msgstr "Réglages"
+
+msgid "Settings file: {}"
+msgstr "Fichier de réglages : {}"
+
+msgid "Size"
+msgstr "Taille"
+
+msgid "Speed"
+msgstr "Vitesse"
+
+msgid "Speed limit"
+msgstr "Limite de débit"
+
+msgid "Start {} files ({})"
+msgstr "Lancer {} fichiers ({})"
+
+msgid "Start all"
+msgstr "Tout lancer"
+
+msgid "Start downloads when BDownloader opens"
+msgstr "Lancer les téléchargements à l'ouverture de BDownloader"
+
+msgid "Start new links automatically"
+msgstr "Lancer automatiquement les nouveaux liens"
+
+msgid "Start selected"
+msgstr "Lancer la sélection"
+
+msgid "Status"
+msgstr "État"
+
+msgid "Status · format"
+msgstr "État · format"
+
+msgid "Switch to dark theme"
+msgstr "Passer au thème sombre"
+
+msgid "Switch to light theme"
+msgstr "Passer au thème clair"
+
+msgid "The link grabber is empty"
+msgstr "La capture de liens est vide"
+
+msgid "Theme"
+msgstr "Thème"
+
+msgid "Type"
+msgstr "Type"
+
+msgid "Update"
+msgstr "Mettre à jour"
+
+msgid "Use"
+msgstr "Actif"
+
+msgid "Use next mirror"
+msgstr "Utiliser le miroir suivant"
+
+msgid "Used when the server allows several connections (multi-connection module)."
+msgstr "Utilisé quand le serveur accepte plusieurs connexions (module multi-connexions)."
+
+msgid "User name or e-mail"
+msgstr "Nom d'utilisateur ou e-mail"
+
+msgid "v0.1 preview"
+msgstr "aperçu v0.1"
+
+msgid "VIDEO"
+msgstr "VIDÉO"
+
+msgid "VIDEO SITES"
+msgstr "SITES VIDÉO"
+
+msgid "Watch clipboard"
+msgstr "Surveiller le presse-papiers"
+
+msgid "Where to find it: {}"
+msgstr "Où le trouver : {}"
+
+msgid "With a debrid service, one account unlocks most hosters. Premium accounts use the hoster's official API. Secrets are kept in the Windows Credential Manager."
+msgstr "Avec un service debrid, un seul compte débloque la plupart des hébergeurs. Les comptes premium passent par l'API officielle de l'hébergeur. Les secrets sont gardés dans le Gestionnaire d'identification de Windows."
+
+msgid "DOWNLOADS"
+msgstr "TÉLÉCHARGEMENTS"
+
+msgid "{} files · {} online"
+msgstr "{} fichiers · {} en ligne"

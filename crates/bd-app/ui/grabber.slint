@@ -1,0 +1,277 @@
+// Link grabber: links land here, get checked and grouped, and start only
+// once the user picked them.
+
+import { ListView, ComboBox, LineEdit, Switch, CheckBox } from "std-widgets.slint";
+import { Theme, Icons, Icon } from "theme.slint";
+import { Btn, IconBtn, Dot, Cell, HeaderCell, HLine, Pill } from "widgets.slint";
+
+export struct GrabRow {
+    is-package: bool,
+    id: int,
+    package: string,
+    name: string,
+    host: string,
+    size: string,
+    // Package: "3 files · 2 online". Link: status text.
+    status: string,
+    // 0 checking, 1 online, 2 unchecked (hoster), 3 offline
+    status-kind: int,
+    checked: bool,
+    mirrors: string,
+    is-video: bool,
+    formats: [string],
+    format-index: int,
+    open: bool,
+    password: string,
+    source: string,
+    // Package with archives: show the password field.
+    archive: bool,
+    files: int,
+    online: int,
+}
+
+export global GrabberState {
+    in property <[GrabRow]> rows;
+    in property <int> total;
+    in property <int> selected-count;
+    in property <string> selected-size;
+    in-out property <bool> clipboard-on;
+    in-out property <bool> clicknload-on;
+    in property <string> clicknload-status;
+    in-out property <bool> auto-start;
+
+    callback add-links();
+    callback start-selected();
+    callback select-all(bool);
+    callback remove-offline();
+    callback clear();
+    callback toggle-package(string);
+    callback check-package(string, bool);
+    callback check-link(int, bool);
+    callback choose-format(int, int);
+    callback package-password(string, string);
+    callback remove-link(int);
+    callback remove-package(string);
+    callback use-mirror(int);
+    callback clipboard-toggled(bool);
+    callback clicknload-toggled(bool);
+    callback auto-start-toggled(bool);
+}
+
+component GrabRowView inherits Rectangle {
+    in property <GrabRow> item;
+    height: 36px;
+    background: item.is-package ? Theme.chr : ta.has-hover ? Theme.hov : transparent;
+
+    function status-color() -> color {
+        if item.status-kind == 1 { return Theme.ok; }
+        if item.status-kind == 2 { return Theme.acc; }
+        if item.status-kind == 3 { return Theme.er; }
+        return Theme.mut;
+    }
+
+    ContextMenuArea {
+        Menu {
+            MenuItem {
+                title: item.is-package ? @tr("Remove package") : @tr("Remove link");
+                activated => {
+                    if item.is-package { GrabberState.remove-package(item.package); } else { GrabberState.remove-link(item.id); }
+                }
+            }
+            MenuItem {
+                title: @tr("Use next mirror");
+                enabled: !item.is-package && item.mirrors != "";
+                activated => { GrabberState.use-mirror(item.id); }
+            }
+        }
+        ta := TouchArea {
+            double-clicked => { if item.is-package { GrabberState.toggle-package(item.package); } }
+        }
+    }
+    HLine { y: parent.height - 1px; }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            min-width: 0;
+            spacing: 6px;
+            padding-left: item.is-package ? 0 : 24px;
+            if item.is-package: VerticalLayout {
+                alignment: center;
+                IconBtn {
+                    size: 20px;
+                    icon: item.open ? Icons.chevron-down : Icons.chevron;
+                    tooltip: @tr("Expand");
+                    clicked => { GrabberState.toggle-package(item.package); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                CheckBox {
+                    checked: item.checked;
+                    enabled: item.status-kind != 3;
+                    toggled => {
+                        if item.is-package { GrabberState.check-package(item.package, self.checked); } else { GrabberState.check-link(item.id, self.checked); }
+                    }
+                }
+            }
+            if !item.is-package && item.is-video: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 17px;
+                    border-radius: 4px;
+                    background: Theme.vid.with-alpha(0.14);
+                    HorizontalLayout {
+                        padding-left: 5px;
+                        padding-right: 5px;
+                        Text { text: @tr("VIDEO"); font-size: 10.5px; font-weight: 600; vertical-alignment: center; color: Theme.vid; }
+                    }
+                }
+            }
+            Cell { text: item.name; font-weight: item.is-package ? 600 : 400; horizontal-stretch: 1; min-width: 0; }
+            if item.is-package: Cell { text: @tr("{} files · {} online", item.files, item.online); font-size: 12px; color: Theme.mut; overflow: clip; }
+        }
+
+        if item.is-package && !item.archive: Rectangle { width: 190px; }
+        if item.is-package && item.archive: VerticalLayout {
+            alignment: center;
+            width: 190px;
+            LineEdit {
+                placeholder-text: @tr("Archive password");
+                text: item.password;
+                edited(text) => { GrabberState.package-password(item.package, text); }
+            }
+        }
+        if !item.is-package: HorizontalLayout {
+            width: 190px;
+            spacing: 4px;
+            Cell { text: item.host; font-size: 13px; color: Theme.mut; }
+            if item.mirrors != "": VerticalLayout { alignment: center; Pill { text: item.mirrors; tone: Theme.acc; } }
+        }
+
+        Cell { text: item.size; width: 82px; horizontal-alignment: right; font-weight: item.is-package ? 600 : 400; }
+
+        if item.is-package: Rectangle { width: 230px; }
+        if !item.is-package && item.is-video: VerticalLayout {
+            alignment: center;
+            width: 230px;
+            ComboBox {
+                model: item.formats;
+                current-index: item.format-index;
+                selected => { GrabberState.choose-format(item.id, self.current-index); }
+            }
+        }
+        if !item.is-package && !item.is-video: HorizontalLayout {
+            width: 230px;
+            spacing: 6px;
+            VerticalLayout { alignment: center; Dot { background: root.status-color(); } }
+            Cell { text: item.status; font-size: 13px; color: root.status-color(); horizontal-stretch: 1; }
+        }
+    }
+}
+
+export component GrabberPage inherits VerticalLayout {
+    // Toolbar.
+    Rectangle {
+        height: 52px;
+        HLine { y: parent.height - 1px; }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 6px;
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { icon: Icons.plus; text: @tr("Add links"); clicked => { GrabberState.add-links(); } } }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Btn {
+                    primary: true;
+                    icon: Icons.play;
+                    text: GrabberState.selected-count == 0 ? @tr("Start selected") : @tr("Start {} files ({})", GrabberState.selected-count, GrabberState.selected-size);
+                    clicked => { GrabberState.start-selected(); }
+                }
+            }
+            VerticalLayout { alignment: center; Rectangle { width: 1px; height: 24px; background: Theme.ln; } }
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { small: true; text: @tr("Select all"); clicked => { GrabberState.select-all(true); } } }
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { small: true; text: @tr("Select none"); clicked => { GrabberState.select-all(false); } } }
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { small: true; text: @tr("Remove offline"); clicked => { GrabberState.remove-offline(); } } }
+            VerticalLayout { alignment: center; horizontal-stretch: 0; Btn { small: true; text: @tr("Clear"); clicked => { GrabberState.clear(); } } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    // Sources.
+    Rectangle {
+        height: 46px;
+        HLine { y: parent.height - 1px; }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 18px;
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout { alignment: center; Switch { checked <=> GrabberState.clipboard-on; toggled => { GrabberState.clipboard-toggled(self.checked); } } }
+                Text { text: @tr("Watch clipboard"); vertical-alignment: center; color: Theme.ink; }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout { alignment: center; Switch { checked <=> GrabberState.clicknload-on; toggled => { GrabberState.clicknload-toggled(self.checked); } } }
+                Text { text: @tr("Click'n'Load"); vertical-alignment: center; color: Theme.ink; }
+                Text { text: GrabberState.clicknload-status; vertical-alignment: center; font-size: 12px; color: Theme.mut; }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout { alignment: center; Switch { checked <=> GrabberState.auto-start; toggled => { GrabberState.auto-start-toggled(self.checked); } } }
+                Text { text: @tr("Start new links automatically"); vertical-alignment: center; color: Theme.ink; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    // Column header.
+    Rectangle {
+        height: 30px;
+        background: Theme.chr;
+        HLine { y: parent.height - 1px; }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 10px;
+            HeaderCell { text: @tr("Package / file"); horizontal-stretch: 1; }
+            HeaderCell { text: @tr("Hoster · password"); width: 190px; }
+            HeaderCell { text: @tr("Size"); width: 82px; horizontal-alignment: right; }
+            HeaderCell { text: @tr("Status · format"); width: 230px; }
+        }
+    }
+
+    Rectangle {
+        vertical-stretch: 1;
+        if GrabberState.total == 0: VerticalLayout {
+            alignment: center;
+            spacing: 10px;
+            HorizontalLayout {
+                alignment: center;
+                Icon { width: 40px; height: 40px; commands: Icons.link; stroke: Theme.mut; stroke-width: 1.4px; }
+            }
+            Text { text: @tr("The link grabber is empty"); font-size: 16px; font-weight: 600; horizontal-alignment: center; color: Theme.ink; }
+            Text {
+                text: @tr("Copy links anywhere, paste a block of text, or use Click'n'Load: they appear here, checked and grouped.");
+                horizontal-alignment: center;
+                color: Theme.mut;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Btn { primary: true; icon: Icons.plus; text: @tr("Add links"); clicked => { GrabberState.add-links(); } }
+            }
+        }
+        if GrabberState.total > 0: ListView {
+            width: 100%;
+            height: 100%;
+            for row in GrabberState.rows: GrabRowView { item: row; }
+        }
+    }
+}

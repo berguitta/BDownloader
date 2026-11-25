@@ -1,8 +1,8 @@
-// Settings screen: appearance, downloads and the module list.
+// Settings: general behaviour, downloads, video tools, extraction, modules.
 
-import { ComboBox, SpinBox, LineEdit, Switch, ScrollView } from "std-widgets.slint";
+import { ComboBox, SpinBox, LineEdit, Switch, ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Pill, HLine } from "widgets.slint";
+import { Btn, Pill, HLine } from "widgets.slint";
 
 export struct ModuleRow {
     id: string,
@@ -18,16 +18,34 @@ export struct ModuleRow {
 export global SettingsState {
     // 0 system, 1 light, 2 dark
     in-out property <int> theme-mode;
+    in property <[string]> languages;
+    in-out property <int> language-index;
     in-out property <string> download-dir;
     in-out property <int> parallel: 4;
     in-out property <int> connections: 8;
+    in-out property <int> speed-limit-kib;
+    in-out property <bool> start-on-launch: true;
+    in-out property <bool> close-to-tray: true;
+    in-out property <bool> minimize-to-tray;
+    in-out property <string> archive-passwords;
+    in-out property <bool> delete-archives: true;
+    in property <string> yt-dlp-status;
+    in property <bool> yt-dlp-installed;
+    in property <string> ffmpeg-status;
+    in property <bool> ffmpeg-installed;
+    in property <bool> tool-busy;
     in property <[ModuleRow]> modules;
     in property <string> config-path;
 
     callback theme-changed(int);
+    callback language-changed(int);
     callback download-dir-changed(string);
     callback parallel-changed(int);
     callback connections-changed(int);
+    callback speed-limit-changed(int);
+    callback flag-changed(string, bool);
+    callback passwords-changed(string);
+    callback install-tool(string);
     callback module-toggled(string, bool);
 }
 
@@ -40,6 +58,7 @@ component SectionTitle inherits Text {
 component SettingRow inherits Rectangle {
     in property <string> title;
     in property <string> hint;
+    in property <length> control-width: 300px;
     min-height: 56px;
     HLine { y: parent.height - 1px; }
     HorizontalLayout {
@@ -49,12 +68,13 @@ component SettingRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
-            Text { text: root.title; font-weight: 500; color: Theme.ink; }
+            Text { text: root.title; font-weight: 500; color: Theme.ink; wrap: word-wrap; }
             if root.hint != "": Text { text: root.hint; font-size: 12.5px; color: Theme.mut; wrap: word-wrap; }
         }
         HorizontalLayout {
             alignment: end;
-            width: 280px;
+            spacing: 8px;
+            width: root.control-width;
             @children
         }
     }
@@ -68,42 +88,64 @@ export component SettingsPage inherits Rectangle {
             spacing: 4px;
             alignment: start;
 
-            Text { text: "Settings"; font-size: 22px; font-weight: 600; color: Theme.ink; }
-            Text { text: "Everything is optional: turn modules on or off, BDownloader only loads what you use."; color: Theme.mut; wrap: word-wrap; }
+            Text { text: @tr("Settings"); font-size: 22px; font-weight: 600; color: Theme.ink; }
+            Text { text: @tr("Everything is optional: turn modules on or off, BDownloader only loads what you use."); color: Theme.mut; wrap: word-wrap; }
 
             Rectangle { height: 12px; }
-            SectionTitle { text: "APPEARANCE"; }
+            SectionTitle { text: @tr("APPEARANCE"); }
             SettingRow {
-                title: "Theme";
-                hint: "Light, dark, or follow the Windows setting.";
+                title: @tr("Theme");
+                hint: @tr("Light, dark, or follow the Windows setting.");
                 VerticalLayout {
                     alignment: center;
                     ComboBox {
                         width: 200px;
-                        model: ["Follow Windows", "Light", "Dark"];
+                        model: [@tr("Follow Windows"), @tr("Light"), @tr("Dark")];
                         current-index <=> SettingsState.theme-mode;
                         selected => { SettingsState.theme-changed(self.current-index); }
                     }
                 }
             }
             SettingRow {
-                title: "Language";
-                hint: "More languages are coming: the interface is ready for translations.";
+                title: @tr("Language");
+                hint: @tr("Interface language. More languages are being added.");
                 VerticalLayout {
                     alignment: center;
-                    ComboBox { width: 200px; model: ["English"]; enabled: false; }
+                    ComboBox {
+                        width: 200px;
+                        model: SettingsState.languages;
+                        current-index <=> SettingsState.language-index;
+                        selected => { SettingsState.language-changed(self.current-index); }
+                    }
                 }
             }
 
             Rectangle { height: 12px; }
-            SectionTitle { text: "DOWNLOADS"; }
+            SectionTitle { text: @tr("GENERAL"); }
             SettingRow {
-                title: "Download folder";
-                hint: "New downloads are saved here.";
+                title: @tr("Start downloads when BDownloader opens");
+                hint: @tr("Otherwise the saved queue comes back paused.");
+                VerticalLayout { alignment: center; Switch { checked <=> SettingsState.start-on-launch; toggled => { SettingsState.flag-changed("start-on-launch", self.checked); } } }
+            }
+            SettingRow {
+                title: @tr("Closing the window keeps BDownloader in the tray");
+                hint: @tr("Downloads continue in the background. Quit from the tray menu.");
+                VerticalLayout { alignment: center; Switch { checked <=> SettingsState.close-to-tray; toggled => { SettingsState.flag-changed("close-to-tray", self.checked); } } }
+            }
+            SettingRow {
+                title: @tr("Minimizing the window hides it to the tray");
+                VerticalLayout { alignment: center; Switch { checked <=> SettingsState.minimize-to-tray; toggled => { SettingsState.flag-changed("minimize-to-tray", self.checked); } } }
+            }
+
+            Rectangle { height: 12px; }
+            SectionTitle { text: @tr("DOWNLOADS"); }
+            SettingRow {
+                title: @tr("Download folder");
+                hint: @tr("New downloads are saved here. Packages with several files get a sub-folder.");
                 VerticalLayout {
                     alignment: center;
                     LineEdit {
-                        width: 280px;
+                        width: 300px;
                         text <=> SettingsState.download-dir;
                         accepted(text) => { SettingsState.download-dir-changed(text); }
                         edited(text) => { SettingsState.download-dir-changed(text); }
@@ -111,36 +153,83 @@ export component SettingsPage inherits Rectangle {
                 }
             }
             SettingRow {
-                title: "Parallel downloads";
-                hint: "How many files download at the same time.";
+                title: @tr("Parallel downloads");
+                hint: @tr("How many files download at the same time.");
                 VerticalLayout {
                     alignment: center;
-                    SpinBox {
-                        width: 110px;
-                        minimum: 1;
-                        maximum: 50;
-                        value <=> SettingsState.parallel;
-                        edited(v) => { SettingsState.parallel-changed(v); }
+                    SpinBox { width: 110px; minimum: 1; maximum: 50; value <=> SettingsState.parallel; edited(v) => { SettingsState.parallel-changed(v); } }
+                }
+            }
+            SettingRow {
+                title: @tr("Connections per download");
+                hint: @tr("Used when the server allows several connections (multi-connection module).");
+                VerticalLayout {
+                    alignment: center;
+                    SpinBox { width: 110px; minimum: 1; maximum: 32; value <=> SettingsState.connections; edited(v) => { SettingsState.connections-changed(v); } }
+                }
+            }
+            SettingRow {
+                title: @tr("Speed limit");
+                hint: @tr("In KiB/s for all downloads together. 0 means unlimited (speed-limit module).");
+                VerticalLayout {
+                    alignment: center;
+                    SpinBox { width: 140px; minimum: 0; maximum: 1000000; step-size: 256; value <=> SettingsState.speed-limit-kib; edited(v) => { SettingsState.speed-limit-changed(v); } }
+                }
+            }
+
+            Rectangle { height: 12px; }
+            SectionTitle { text: @tr("VIDEO SITES"); }
+            SettingRow {
+                title: "yt-dlp";
+                hint: @tr("Needed for YouTube and other video sites. Downloaded from its official GitHub releases.");
+                control-width: 360px;
+                Text { text: SettingsState.yt-dlp-status; font-size: 12.5px; color: SettingsState.yt-dlp-installed ? Theme.ok : Theme.mut; vertical-alignment: center; overflow: elide; }
+                VerticalLayout {
+                    alignment: center;
+                    Btn {
+                        small: true;
+                        text: SettingsState.yt-dlp-installed ? @tr("Update") : @tr("Install");
+                        clicked => { if !SettingsState.tool-busy { SettingsState.install-tool("yt-dlp"); } }
                     }
                 }
             }
             SettingRow {
-                title: "Connections per download";
-                hint: "Used when the server allows several connections (multi-connection module).";
+                title: "ffmpeg";
+                hint: @tr("Optional: best quality (video and audio merged) and MP3 conversion. About 100 MB.");
+                control-width: 360px;
+                Text { text: SettingsState.ffmpeg-status; font-size: 12.5px; color: SettingsState.ffmpeg-installed ? Theme.ok : Theme.mut; vertical-alignment: center; overflow: elide; }
                 VerticalLayout {
                     alignment: center;
-                    SpinBox {
-                        width: 110px;
-                        minimum: 1;
-                        maximum: 32;
-                        value <=> SettingsState.connections;
-                        edited(v) => { SettingsState.connections-changed(v); }
+                    Btn {
+                        small: true;
+                        text: SettingsState.ffmpeg-installed ? @tr("Reinstall") : @tr("Install");
+                        clicked => { if !SettingsState.tool-busy { SettingsState.install-tool("ffmpeg"); } }
                     }
                 }
             }
 
             Rectangle { height: 12px; }
-            SectionTitle { text: "MODULES"; }
+            SectionTitle { text: @tr("EXTRACTION"); }
+            SettingRow {
+                title: @tr("Archive passwords");
+                hint: @tr("One per line, tried in order after the package password.");
+                VerticalLayout {
+                    alignment: center;
+                    TextEdit {
+                        width: 300px;
+                        height: 90px;
+                        text <=> SettingsState.archive-passwords;
+                        edited(text) => { SettingsState.passwords-changed(text); }
+                    }
+                }
+            }
+            SettingRow {
+                title: @tr("Delete archives after a successful extraction");
+                VerticalLayout { alignment: center; Switch { checked <=> SettingsState.delete-archives; toggled => { SettingsState.flag-changed("delete-archives", self.checked); } } }
+            }
+
+            Rectangle { height: 12px; }
+            SectionTitle { text: @tr("MODULES"); }
             for m in SettingsState.modules: VerticalLayout {
                 if m.first-in-category: Text {
                     text: m.category;
@@ -155,7 +244,7 @@ export component SettingsPage inherits Rectangle {
                     hint: m.description;
                     if !m.available: VerticalLayout {
                         alignment: center;
-                        Pill { text: "Planned"; }
+                        Pill { text: @tr("Planned"); }
                     }
                     VerticalLayout {
                         alignment: center;
@@ -169,7 +258,7 @@ export component SettingsPage inherits Rectangle {
             }
 
             Rectangle { height: 16px; }
-            Text { text: "Settings file: " + SettingsState.config-path; font-size: 12px; color: Theme.mut; wrap: word-wrap; }
+            Text { text: @tr("Settings file: {}", SettingsState.config-path); font-size: 12px; color: Theme.mut; wrap: word-wrap; }
         }
     }
 }

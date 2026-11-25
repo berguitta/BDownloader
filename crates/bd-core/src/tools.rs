@@ -72,9 +72,7 @@ pub async fn install(tool: Tool, engine: &Engine, slot: Arc<ControlSlot>) -> Res
         Tool::Ffmpeg => {
             let dir2 = dir.clone();
             let zip_path = downloaded.clone();
-            tokio::task::spawn_blocking(move || unpack_ffmpeg(&zip_path, &dir2))
-                .await
-                .map_err(|e| e.to_string())??;
+            tokio::task::spawn_blocking(move || unpack_ffmpeg(&zip_path, &dir2)).await.map_err(|e| e.to_string())??;
             let _ = tokio::fs::remove_file(&downloaded).await;
         }
     }
@@ -89,7 +87,8 @@ fn unpack_ffmpeg(zip_path: &Path, dir: &Path) -> Result<(), String> {
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().map(|n| n.into_owned()).unwrap_or_default();
-        let Some(exe) = ["ffmpeg.exe", "ffprobe.exe"].into_iter().find(|exe| name.ends_with(&format!("bin/{exe}"))) else {
+        let Some(exe) = ["ffmpeg.exe", "ffprobe.exe"].into_iter().find(|exe| name.ends_with(&format!("bin/{exe}")))
+        else {
             continue;
         };
         let mut bytes = Vec::new();
