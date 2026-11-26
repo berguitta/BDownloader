@@ -3,9 +3,28 @@ docs/PLAN.md
 
 # Rust build output
 target/
-
-# Tauri generated schemas
-prototypes/tauri-list/gen/
+**/*.rs.bk
 
 # Local UI prototypes (not published)
 prototypes/
+
+# Partial downloads and resume state
+*.part
+*.part.json
+
+# Local config, secrets and logs
+.env
+.env.*
+*.log
+
+# Free-mode page dumps and UI snapshots made while debugging
+step*.html
+/*.png
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
