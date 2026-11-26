@@ -445,11 +445,14 @@ pub fn name_on_page(html: &str) -> Option<String> {
 async fn wait_seconds(slot: &Arc<ControlSlot>, seconds: u64, what: &str) -> FreeResult<()> {
     for left in (1..=seconds).rev() {
         if slot.is_cancelled() {
+            slot.set_wait(None);
             return Err(FreeError::Other("cancelled".into()));
         }
         slot.set_status(Some(&format!("{what}: {left} s")));
+        slot.set_wait(Some((left, seconds)));
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+    slot.set_wait(None);
     slot.set_status(None);
     Ok(())
 }

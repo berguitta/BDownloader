@@ -74,6 +74,7 @@ fn french(text: &str) -> Option<&'static str> {
         "In MB/s, any value. 0 removes the limit." => "En Mo/s, n'importe quelle valeur. 0 retire la limite.",
         "Applies at the next start" => "S'applique au prochain lancement",
         "Free mode…" => "Mode gratuit…",
+        "Wait" => "Attente",
         _ => return None,
     })
 }

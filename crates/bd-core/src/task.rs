@@ -55,6 +55,8 @@ pub type RunResult = Result<PathBuf, RunError>;
 pub struct ControlSlot {
     control: Mutex<Option<Arc<dyn TaskControl>>>,
     status: Mutex<Option<String>>,
+    /// Wait timer imposed by a hoster: (seconds left, total seconds).
+    wait: Mutex<Option<(u64, u64)>>,
     cancelled: AtomicBool,
 }
 
@@ -94,6 +96,15 @@ impl ControlSlot {
 
     pub fn status(&self) -> Option<String> {
         self.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Countdown shown in the progress bar while a hoster makes us wait.
+    pub fn set_wait(&self, wait: Option<(u64, u64)>) {
+        *self.wait.lock().unwrap_or_else(|e| e.into_inner()) = wait;
+    }
+
+    pub fn wait(&self) -> Option<(u64, u64)> {
+        *self.wait.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 

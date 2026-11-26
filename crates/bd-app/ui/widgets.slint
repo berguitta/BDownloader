@@ -149,9 +149,10 @@ export component Pill inherits Rectangle {
 // Progress bar split into one block per connection.
 export component SegBar inherits Rectangle {
     in property <[float]> segs;
-    // 0 active, 1 finished, 2 idle
+    // 0 active, 1 finished, 2 idle, 3 hoster wait timer
     in property <int> kind;
     in property <length> bar-height: 12px;
+    in property <string> label;
     height: bar-height;
     border-radius: 3px;
     clip: true;
@@ -164,9 +165,17 @@ export component SegBar inherits Rectangle {
             Rectangle {
                 x: 0;
                 width: parent.width * v;
-                background: root.kind == 1 ? Theme.ok : root.kind == 2 ? Theme.acc.mix(Theme.trk, 0.45) : Theme.acc;
+                background: root.kind == 1 ? Theme.ok : root.kind == 2 ? Theme.acc.mix(Theme.trk, 0.45) : root.kind == 3 ? Theme.wa : Theme.acc;
             }
         }
+    }
+    if root.label != "": Text {
+        text: root.label;
+        font-size: 11px;
+        font-weight: 600;
+        color: Theme.ink;
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 }
 

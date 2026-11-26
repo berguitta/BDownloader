@@ -1041,7 +1041,11 @@ impl App {
             None if job.state == JobState::Finished => 1.0,
             None => 0.0,
         };
-        let segs: Vec<f32> = if job.segments.is_empty() {
+        let wait = job.wait.filter(|_| job.state == JobState::Downloading);
+        let segs: Vec<f32> = if let Some((left, total)) = wait {
+            // The bar fills as the hoster's wait timer runs out.
+            vec![1.0 - left as f32 / total.max(1) as f32]
+        } else if job.segments.is_empty() {
             vec![fraction as f32]
         } else {
             job.segments
@@ -1098,18 +1102,29 @@ impl App {
             size: job.total.map(format::bytes).unwrap_or_default().into(),
             segs: ModelRc::new(VecModel::from(segs)),
             bar_kind: match job.state {
+                _ if wait.is_some() => 3,
                 JobState::Finished => 1,
                 JobState::Downloading => 0,
                 _ => 2,
             },
-            percent: if job.total.is_some() || job.state == JobState::Finished {
+            bar_label: wait
+                .map(|(left, _)| format!("{} {}", t("Wait"), format::duration(left as f64)))
+                .unwrap_or_default()
+                .into(),
+            percent: if wait.is_some() {
+                String::new()
+            } else if job.total.is_some() || job.state == JobState::Finished {
                 format!("{}%", (fraction * 100.0).floor())
             } else {
                 String::new()
             }
             .into(),
             speed: format::speed(job.speed).into(),
-            eta: job.eta().map(format::duration).unwrap_or_default().into(),
+            eta: wait
+                .map(|(left, _)| format::duration(left as f64))
+                .or_else(|| job.eta().map(format::duration))
+                .unwrap_or_default()
+                .into(),
             status: status.into(),
             status_kind: kind,
             selected,

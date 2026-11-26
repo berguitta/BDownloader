@@ -111,6 +111,8 @@ pub struct JobSnapshot {
     pub resumed: bool,
     /// Status text while there is no progress yet ("Resolving link…").
     pub status: Option<String>,
+    /// Hoster wait timer: (seconds left, total seconds).
+    pub wait: Option<(u64, u64)>,
 }
 
 impl JobSnapshot {
@@ -455,6 +457,7 @@ impl DownloadManager {
                 path: j.path.clone(),
                 resumed: j.resumed,
                 status: j.slot.as_ref().and_then(|s| s.status()),
+                wait: j.slot.as_ref().and_then(|s| s.wait()),
             })
             .collect()
     }
