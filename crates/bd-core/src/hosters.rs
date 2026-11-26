@@ -26,6 +26,7 @@ pub enum Free {
     Gofile,
     GoogleDrive,
     Krakenfiles,
+    FuckingFast,
     Pixeldrain,
     Dropbox,
     /// The site always asks for a captcha or uses encryption: the page is
@@ -101,6 +102,7 @@ pub const HOSTERS: &[(&str, &[&str], Free)] = &[
     ("Gofile", &["gofile.io"], Free::Gofile),
     ("Google Drive", &["drive.google.com", "drive.usercontent.google.com"], Free::GoogleDrive),
     ("Krakenfiles", &["krakenfiles.com"], Free::Krakenfiles),
+    ("FuckingFast", &["fuckingfast.co"], Free::FuckingFast),
     ("Pixeldrain", &["pixeldrain.com", "pixeldra.in"], Free::Pixeldrain),
     ("Dropbox", &["dropbox.com"], Free::Dropbox),
     ("OneDrive", &["onedrive.live.com", "1drv.ms"], Free::Browser),
@@ -349,6 +351,7 @@ impl HosterResolver {
                 Free::Gofile => free::gofile(url).await,
                 Free::GoogleDrive => free::google_drive(url).await,
                 Free::Krakenfiles => free::krakenfiles(url).await,
+                Free::FuckingFast => free::fuckingfast(url).await,
                 Free::Pixeldrain | Free::Dropbox => Err(FreeError::Other("this link is not a file link".into())),
                 Free::Browser => Err(FreeError::Captcha(url.clone())),
             };

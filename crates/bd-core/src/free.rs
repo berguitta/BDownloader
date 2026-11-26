@@ -845,6 +845,38 @@ pub async fn google_drive(url: &Url) -> FreeResult<Resolved> {
 }
 
 /// Krakenfiles: the page form posts a token and answers with the link.
+/// Whether a response is Cloudflare's "Just a moment…" browser check, which
+/// only a real browser passes.
+pub fn is_browser_check(status: u16, html: &str) -> bool {
+    matches!(status, 403 | 503) && (html.contains("<title>Just a moment") || html.contains("challenges.cloudflare.com"))
+}
+
+/// FuckingFast: the page opens the file with `window.open("https://fuckingfast.co/dl/…")`.
+pub async fn fuckingfast(url: &Url) -> FreeResult<Resolved> {
+    let client = session_client();
+    let response = client.get(url.clone()).send().await.map_err(net)?;
+    let status = response.status().as_u16();
+    let page = response.url().clone();
+    let html = response.text().await.map_err(other)?;
+    if is_browser_check(status, &html) {
+        return Err(FreeError::Captcha(url.clone()));
+    }
+    if status == 404 || looks_offline(&html) {
+        return Err(FreeError::Offline("removed".into()));
+    }
+    fuckingfast_link(&page, &html)
+        .map(|link| direct(link, "FuckingFast (free)"))
+        .ok_or_else(|| other("FuckingFast page changed"))
+}
+
+fn fuckingfast_link(page: &Url, html: &str) -> Option<Url> {
+    let pos = html.find("window.open(")?;
+    let rest = html[pos + 12..].trim_start();
+    let quote = rest.chars().next().filter(|q| matches!(q, '"' | '\''))?;
+    let link = rest[1..].split(quote).next()?;
+    page.join(link).ok().filter(|u| u.path().contains("/dl/"))
+}
+
 pub async fn krakenfiles(url: &Url) -> FreeResult<Resolved> {
     let client = session_client();
     let (page, html) = get_text(&client, url).await?;
@@ -981,6 +1013,16 @@ mod tests {
             "https://cdn.example.net/d/file.rar"
         );
         assert!(json_link("<html>", &page).is_none());
+    }
+
+    #[test]
+    fn reads_fuckingfast_links_and_browser_checks() {
+        let page = Url::parse("https://fuckingfast.co/oc7epwsd3m8c").unwrap();
+        let html = r#"<button onclick="download()"></button><script>function download(){ window.open("https://fuckingfast.co/dl/AbC_123") }</script>"#;
+        assert_eq!(fuckingfast_link(&page, html).unwrap().as_str(), "https://fuckingfast.co/dl/AbC_123");
+        assert!(fuckingfast_link(&page, "<p>nothing</p>").is_none());
+        assert!(is_browser_check(403, "<html><head><title>Just a moment...</title>"));
+        assert!(!is_browser_check(200, "<title>Just a moment</title>"));
     }
 
     #[test]
