@@ -52,6 +52,17 @@ fn other(e: impl std::fmt::Display) -> FreeError {
     FreeError::Other(e.to_string())
 }
 
+/// Network error with its causes ("error sending request" alone says little).
+fn net(e: reqwest::Error) -> FreeError {
+    let mut text = e.to_string();
+    let mut source = std::error::Error::source(&e);
+    while let Some(cause) = source {
+        text.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    FreeError::Other(text)
+}
+
 /// Browser-like client with its own cookie jar for one resolution.
 pub fn session_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -631,7 +642,7 @@ pub async fn xfilesharing(
             .filter(|a| !a.is_empty())
             .and_then(|a| page.join(a).ok())
             .unwrap_or_else(|| page.clone());
-        let response = client.post(action).header(REFERER, page.as_str()).form(&fields).send().await.map_err(other)?;
+        let response = client.post(action).header(REFERER, page.as_str()).form(&fields).send().await.map_err(net)?;
         // The last step often answers with a redirect to the file.
         let final_url = response.url().clone();
         let is_file = response
@@ -670,6 +681,27 @@ fn free_button_disabled(form_html: &str) -> bool {
 /// Second step built by JavaScript (datanodes): the page only carries the
 /// timer (`countdown="30"`) and a `rand` value; the form is the usual one.
 fn script_download2(html: &str, page: &Url, file_id: &str) -> Option<Form> {
+    // filekeeper: <div data-countdown="5" data-code="…" data-rand="" data-referer="" data-method="">
+    if let Some(tag) = tags(html, "div").into_iter().find(|t| attr(t, "data-countdown").is_some()) {
+        let data = |name: &str| attr(tag, name).unwrap_or_default();
+        let id = Some(data("data-code")).filter(|c| !c.is_empty()).unwrap_or_else(|| file_id.to_owned());
+        if id.is_empty() {
+            return None;
+        }
+        let method = Some(data("data-method")).filter(|m| !m.is_empty()).unwrap_or_else(|| "Free download".into());
+        return Some(Form {
+            method: "post".into(),
+            fields: vec![
+                ("op".into(), "download2".into()),
+                ("id".into(), id),
+                ("rand".into(), data("data-rand")),
+                ("referer".into(), data("data-referer")),
+                ("method_free".into(), method),
+                ("down_direct".into(), "1".into()),
+            ],
+            ..Form::default()
+        });
+    }
     if !html.contains("countdown=\"") || file_id.is_empty() {
         return None;
     }
@@ -936,6 +968,14 @@ mod tests {
         assert_eq!(form.field("id"), Some("abc123def456"));
         assert_eq!(form.field("rand"), Some("r4nd"));
         assert!(script_download2("<p>nothing</p>", &page, "abc").is_none());
+        let fk = r#"<div id="download-countdown" class="w-full" data-countdown="5" data-code="5yttfnposrrr"
+            data-referer="" data-rand="" data-method="" data-has-captcha="false">"#;
+        let page = Url::parse("https://filekeeper.net/download").unwrap();
+        let form = script_download2(fk, &page, "download").unwrap();
+        assert_eq!(form.field("id"), Some("5yttfnposrrr"));
+        assert_eq!(form.field("method_free"), Some("Free download"));
+        assert_eq!(form.field("down_direct"), Some("1"));
+        assert_eq!(countdown(fk), Some(5));
         assert_eq!(
             json_link(r#"{"url":"https%3A%2F%2Fcdn.example.net%2Fd%2Ffile.rar"}"#, &page).unwrap().as_str(),
             "https://cdn.example.net/d/file.rar"
