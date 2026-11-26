@@ -184,6 +184,55 @@ component CaptchaDialog inherits Rectangle {
     init => { field.focus(); }
 }
 
+// Card around the in-app browser window. The page itself is a native
+// WebView2 child drawn on top of the body: its geometry is mirrored in
+// src/browser.rs (32px sides, 56px top, 32px bottom, 64px header).
+component BrowserPanel inherits Rectangle {
+    in property <string> hoster;
+    callback cancel();
+    callback external();
+    background: #00000066;
+    TouchArea {}
+    Rectangle {
+        x: 32px;
+        y: 56px;
+        width: parent.width - 64px;
+        height: parent.height - 88px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.ln;
+        background: Theme.win;
+        drop-shadow-blur: 30px;
+        drop-shadow-color: #00000055;
+        HorizontalLayout {
+            y: 0;
+            height: 64px;
+            padding-left: 16px;
+            padding-right: 12px;
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: @tr("Browser check for {}", root.hoster); font-size: 15px; font-weight: 600; color: Theme.ink; }
+                Text {
+                    text: @tr("Tick the box and click the site's download button. BDownloader takes the file over.");
+                    font-size: 12px;
+                    color: Theme.mut;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Btn { text: @tr("Open in my browser"); clicked => { root.external(); } }
+                    Btn { text: @tr("Cancel"); clicked => { root.cancel(); } }
+                }
+            }
+        }
+    }
+}
+
 // Window control button (minimize, maximize, close) in the custom title bar.
 component WindowButton inherits Rectangle {
     in property <string> icon;
@@ -323,6 +372,11 @@ export component AppWindow inherits Window {
     callback captcha-answer(string);
     callback captcha-skip();
     callback captcha-open-page();
+
+    in property <bool> browser-open;
+    in property <string> browser-hoster;
+    callback browser-cancel();
+    callback browser-external();
 
     callback window-drag();
     callback window-resize(int);
@@ -546,6 +600,14 @@ export component AppWindow inherits Window {
         confirm(v) => { root.captcha-answer(v); }
         skip => { root.captcha-skip(); }
         open-page => { root.captcha-open-page(); }
+    }
+
+    if root.browser-open: BrowserPanel {
+        width: 100%;
+        height: 100%;
+        hoster: root.browser-hoster;
+        cancel => { root.browser-cancel(); }
+        external => { root.browser-external(); }
     }
 
     // Toast: small card at the top center, fades and slides in.

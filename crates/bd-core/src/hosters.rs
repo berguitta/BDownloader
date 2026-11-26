@@ -195,6 +195,26 @@ pub async fn check_link(url: &Url) -> LinkCheck {
     }
 }
 
+/// Waits for the browser window, giving up when the download is cancelled
+/// or after 15 minutes.
+async fn wait_browser(
+    done: futures_util::future::BoxFuture<'static, Option<free::BrowserResult>>,
+    slot: &Arc<ControlSlot>,
+) -> Option<free::BrowserResult> {
+    let mut done = tokio::spawn(tokio::time::timeout(std::time::Duration::from_secs(900), done));
+    loop {
+        tokio::select! {
+            result = &mut done => return result.ok().and_then(|r| r.ok()).flatten(),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                if slot.is_cancelled() {
+                    done.abort();
+                    return None;
+                }
+            }
+        }
+    }
+}
+
 /// Account details shown in the Accounts screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountCheck {
@@ -244,6 +264,7 @@ pub struct HosterResolver {
     options: RwLock<ResolverOptions>,
     on_captcha: RwLock<Option<CaptchaHandler>>,
     ask_captcha: RwLock<Option<free::CaptchaFn>>,
+    browser: RwLock<Option<free::BrowserFn>>,
     tokens: Mutex<HashMap<String, String>>,
 }
 
@@ -255,6 +276,7 @@ impl HosterResolver {
             options: RwLock::default(),
             on_captcha: RwLock::default(),
             ask_captcha: RwLock::default(),
+            browser: RwLock::default(),
             tokens: Mutex::default(),
         })
     }
@@ -275,6 +297,12 @@ impl HosterResolver {
     /// Shows code and image captchas to the user inside the app.
     pub fn set_captcha_ask(&self, ask: free::CaptchaFn) {
         *self.ask_captcha.write().unwrap_or_else(|e| e.into_inner()) = Some(ask);
+    }
+
+    /// Lets the user finish browser-only checks in the app's own browser
+    /// window; the download then continues by itself.
+    pub fn set_browser(&self, browser: free::BrowserFn) {
+        *self.browser.write().unwrap_or_else(|e| e.into_inner()) = Some(browser);
     }
 
     fn captcha_ask(&self, options: &ResolverOptions) -> Option<free::CaptchaAsk> {
@@ -359,6 +387,26 @@ impl HosterResolver {
             match result {
                 Ok(resolved) => return Ok(resolved),
                 Err(FreeError::Captcha(page)) => {
+                    let browser = self.browser.read().unwrap_or_else(|e| e.into_inner()).clone();
+                    if let (CaptchaMode::Browser, Some(browser)) = (options.captcha, browser) {
+                        slot.set_status(Some("Browser check: finish it in the BDownloader window"));
+                        let request = free::BrowserRequest { hoster: hoster.to_owned(), page: page.clone() };
+                        let done = wait_browser(browser(request), &slot).await;
+                        slot.set_status(None);
+                        match done {
+                            Some(result) => {
+                                return Ok(Resolved {
+                                    via: format!("{hoster} (free, browser)"),
+                                    headers: result.headers,
+                                    ..Resolved::direct(result.url)
+                                });
+                            }
+                            None => {
+                                errors.push(format!("{hoster}: browser check not finished"));
+                                return Err(errors.pop().unwrap_or_default());
+                            }
+                        }
+                    }
                     let message = match options.captcha {
                         CaptchaMode::Browser => {
                             format!("{hoster} free mode needs a check in your browser: the page was opened there")

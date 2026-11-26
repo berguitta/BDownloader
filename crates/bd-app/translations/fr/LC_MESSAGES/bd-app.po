@@ -622,3 +622,12 @@ msgstr "Ouvrir la page"
 
 msgid "Skip"
 msgstr "Ignorer"
+
+msgid "Browser check for {}"
+msgstr "Vérification navigateur pour {}"
+
+msgid "Tick the box and click the site's download button. BDownloader takes the file over."
+msgstr "Cochez la case et cliquez sur le bouton de téléchargement du site. BDownloader prend le fichier en charge."
+
+msgid "Open in my browser"
+msgstr "Ouvrir dans mon navigateur"
