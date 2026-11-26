@@ -247,6 +247,7 @@ impl Engine {
             ))
             .connect_timeout(Duration::from_secs(15))
             .read_timeout(Duration::from_secs(30))
+            .dns_resolver(crate::dns::resolver())
             .build()?;
         Ok(Self::with_client(client))
     }

@@ -9,6 +9,7 @@
 //!   (cancel, crash, reboot) resumes at the exact byte where it stopped;
 //! - retries failed segments with exponential backoff.
 
+pub mod dns;
 mod engine;
 mod error;
 mod name;

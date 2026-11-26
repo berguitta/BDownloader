@@ -71,6 +71,7 @@ pub fn session_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(BROWSER_UA)
         .cookie_store(true)
+        .dns_resolver(bd_net::dns::resolver())
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(60))
         .build()

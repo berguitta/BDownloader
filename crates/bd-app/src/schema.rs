@@ -242,6 +242,33 @@ pub const DEFS: &[Def] = &[
         "Limite de départ, baissée automatiquement si un serveur refuse.",
         num(16, 1, 64, "max"),
     ))),
+    d(
+        1,
+        "secure-dns",
+        "Secure DNS",
+        "DNS sécurisé",
+        "Only for BDownloader. Windows and your other programs are not changed.",
+        "Seulement pour BDownloader. Windows et vos autres programmes ne changent pas.",
+        Kind::Select {
+            default: "off",
+            options: &[
+                ("off", "Off (DNS of the network card)", "Désactivé (DNS de la carte réseau)"),
+                ("cloudflare", "Cloudflare (1.1.1.1)", "Cloudflare (1.1.1.1)"),
+                ("quad9", "Quad9 (9.9.9.9)", "Quad9 (9.9.9.9)"),
+                ("google", "Google (8.8.8.8)", "Google (8.8.8.8)"),
+                ("custom", "My own server", "Mon propre serveur"),
+            ],
+        },
+    ),
+    adv(d(
+        1,
+        "secure-dns-url",
+        "Own secure DNS server",
+        "Mon serveur DNS sécurisé",
+        "DNS over HTTPS address, like https://dns.example/dns-query",
+        "Adresse DNS over HTTPS, par exemple https://dns.example/dns-query",
+        Kind::Text(""),
+    )),
     restart(adv(d(1, "timeout", "Connection timeout", "Délai de connexion", "", "", num(30, 5, 300, "s")))),
     restart(adv(d(
         1,
@@ -728,6 +755,10 @@ pub fn info(id: &str) -> Option<(&'static str, &'static str)> {
         "preallocate" => (
             "The full file size is reserved on disk at the start: the file is not fragmented and you know at once if there is enough space.",
             "La taille complète du fichier est réservée sur le disque dès le début : le fichier n'est pas fragmenté et vous savez tout de suite s'il y a assez de place.",
+        ),
+        "secure-dns" => (
+            "To open a site, BDownloader first asks a DNS server for its address. Some internet providers answer with a block page for some file hosters. With secure DNS, BDownloader asks the server you choose, encrypted (DNS over HTTPS). Only BDownloader's downloads use it: Windows, your network card and your other programs keep their DNS. Turn it off to go back. Videos (yt-dlp) and torrents keep the system DNS.",
+            "Pour ouvrir un site, BDownloader demande d'abord son adresse à un serveur DNS. Certains fournisseurs d'accès répondent par une page de blocage pour certains hébergeurs. Avec le DNS sécurisé, BDownloader interroge le serveur choisi, en chiffré (DNS over HTTPS). Seuls les téléchargements de BDownloader l'utilisent : Windows, la carte réseau et vos autres programmes gardent leur DNS. Désactivez pour revenir comme avant. Les vidéos (yt-dlp) et les torrents gardent le DNS du système.",
         ),
         "prefer-debrid" => (
             "With both a premium account and a debrid service for the same hoster, use the debrid service first.",

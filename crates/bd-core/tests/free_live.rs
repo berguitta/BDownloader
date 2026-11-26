@@ -14,6 +14,9 @@ use bd_core::task::ControlSlot;
 async fn resolves_a_free_link() {
     let Ok(link) = std::env::var("BD_FREE_URL") else { return };
     let url = url::Url::parse(&link).unwrap();
+    if let Ok(provider) = std::env::var("BD_SECURE_DNS") {
+        bd_net::dns::set_secure_dns(bd_net::dns::endpoint_of(&provider));
+    }
     let slot = Arc::new(ControlSlot::default());
     let ask = CaptchaAsk {
         ask: Arc::new(|request| {
@@ -27,5 +30,10 @@ async fn resolves_a_free_link() {
     };
     let result = free::xfilesharing(&url, &slot, "live (free)", Some(&ask)).await;
     println!("{result:?}");
-    assert!(result.is_ok(), "{result:?}");
+    let resolved = result.expect("free mode");
+    // The file server must answer too (first bytes only).
+    let engine = bd_net::Engine::new().unwrap();
+    let response = engine.client().get(resolved.url.clone()).header("Range", "bytes=0-99").send().await.unwrap();
+    println!("file server: {} {:?}", response.status(), response.headers().get("content-length"));
+    assert!(response.status().is_success());
 }

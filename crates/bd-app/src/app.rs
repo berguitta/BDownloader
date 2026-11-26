@@ -168,6 +168,11 @@ impl App {
             limit = if limit == 0 { kib * 1024 } else { limit.min(kib * 1024) };
         }
         self.manager.set_speed_limit(limit);
+        bd_net::dns::set_secure_dns(match self.settings.text("secure-dns", "off") {
+            "off" => None,
+            "custom" => bd_net::dns::endpoint_of(self.settings.text("secure-dns-url", "").trim()),
+            provider => bd_net::dns::endpoint_of(provider),
+        });
         self.resolver.set_credentials(self.accounts.credentials());
         self.resolver.set_options(ResolverOptions {
             prefer_debrid: self.settings.flag("prefer-debrid", false),
