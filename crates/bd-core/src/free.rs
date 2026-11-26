@@ -225,6 +225,9 @@ fn has_class(html: &str, class: &str) -> bool {
 /// which the user can answer inside the app; the others are widgets that
 /// only work in a browser.
 pub fn captcha_on(html: &str) -> Option<&'static str> {
+    // Widgets can sit HTML-escaped in an attribute, inserted later by a script.
+    let decoded = decode_html(html);
+    let html = decoded.as_str();
     if has_class(html, "g-recaptcha") {
         Some("reCAPTCHA")
     } else if has_class(html, "h-captcha") {
@@ -567,12 +570,18 @@ pub async fn xfilesharing(
             matches!(f.field("op"), Some("download1" | "download2" | "download3"))
                 || f.id.as_deref() == Some("downloadForm")
         });
-        let form = match found.or_else(|| script_download2(&html, &page, &file_id)) {
+        let form = match found {
             Some(form) => form,
-            // Only a real captcha widget on the page sends the user to the
-            // browser; scripts merely mentioning one do not.
-            None if captcha_on(&html).is_some() => return Err(FreeError::Captcha(url.clone())),
-            None => return Err(other(format!("{via}: page not recognised"))),
+            // Step built by a script: a widget it will insert (datanodes keeps
+            // it HTML-escaped in an attribute) needs the browser.
+            None if captcha_on(&html).is_some_and(|k| k != "code") => {
+                tracing::info!(hoster = via, "script step with a browser captcha");
+                return Err(FreeError::Captcha(url.clone()));
+            }
+            None => match script_download2(&html, &page, &file_id) {
+                Some(form) => form,
+                None => return Err(other(format!("{via}: page not recognised"))),
+            },
         };
         if let Some(id) = form.field("id").filter(|id| !id.is_empty()) {
             file_id = id.to_owned();
@@ -1006,6 +1015,8 @@ mod tests {
         assert_eq!(captcha_on(r#"<div class="g-recaptcha" data-sitekey="x">"#), Some("reCAPTCHA"));
         assert_eq!(captcha_on(r#"<div class="h-captcha">"#), Some("hCaptcha"));
         assert_eq!(captcha_on("<p>hello</p>"), None);
+        let dn = r#"<download-countdown :countdown="5" captcha-html="&lt;div class=&quot;cf-turnstile&quot; data-sitekey=&quot;k&quot;&gt;&lt;/div&gt;">"#;
+        assert_eq!(captcha_on(dn), Some("Turnstile"));
         // A script that only looks for a widget is not a captcha (datanodes).
         assert_eq!(captcha_on("<script>if (f.querySelector('.cf-turnstile')) {}</script>"), None);
         assert_eq!(captcha_on(r#"<button class="btn g-recaptcha" data-sitekey="k">"#), Some("reCAPTCHA"));
