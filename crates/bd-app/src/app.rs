@@ -54,6 +54,8 @@ pub enum UiMsg {
         image: Option<(Vec<u8>, u32, u32)>,
     },
     Toast(String),
+    /// Free mode asks the user to type a captcha.
+    Captcha(bd_core::free::CaptchaRequest, tokio::sync::oneshot::Sender<Option<String>>),
     Checksums {
         package: String,
         results: Vec<bd_core::checksum::CheckResult>,
@@ -114,6 +116,7 @@ pub struct App {
     pub last_account_check: Instant,
     pub awake: bool,
     pub mini: Option<crate::MiniWindow>,
+    pub captchas: crate::captcha::Queue,
 }
 
 impl App {
@@ -165,9 +168,6 @@ impl App {
             limit = if limit == 0 { kib * 1024 } else { limit.min(kib * 1024) };
         }
         self.manager.set_speed_limit(limit);
-        let enabled: Vec<String> =
-            self.modules.list().into_iter().filter(|(_, on)| *on).map(|(m, _)| m.id.to_owned()).collect();
-        self.resolver.set_enabled_modules(enabled);
         self.resolver.set_credentials(self.accounts.credentials());
         self.resolver.set_options(ResolverOptions {
             prefer_debrid: self.settings.flag("prefer-debrid", false),
@@ -178,6 +178,7 @@ impl App {
                 _ => CaptchaMode::Browser,
             },
             reconnect: crate::actions::reconnect_hook(self),
+            captcha_timeout: Duration::from_secs(self.settings.number("captcha-timeout", 120).clamp(20, 900) as u64),
         });
         self.grabber.set_page_scan(self.modules.is_enabled("page-scan"));
         let backend = self.video_backend();
@@ -445,6 +446,7 @@ impl App {
     /// Called by the timer: pulls fresh state and pushes it to the UI.
     pub fn refresh(&mut self, ui: &AppWindow) {
         self.handle_messages(ui);
+        crate::captcha::refresh(self, ui);
         self.handle_events();
         self.refresh_downloads(ui);
         self.refresh_grabber(ui, false);
@@ -949,6 +951,7 @@ impl App {
                     crate::actions::send_event(self, "extracted", &package, "", &package, false);
                 }
                 UiMsg::Toast(text) => self.toast(text),
+                UiMsg::Captcha(request, reply) => crate::captcha::push(self, ui, request, reply),
                 UiMsg::Checksums { package, results } => {
                     let bad: Vec<String> = results
                         .iter()

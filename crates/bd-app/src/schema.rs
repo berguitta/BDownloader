@@ -302,8 +302,8 @@ pub const DEFS: &[Def] = &[
         "free-fallback",
         "Fall back to free mode",
         "Repli sur le mode gratuit",
-        "Wait timers when no account can be used. Captchas open in your browser.",
-        "Temps d'attente quand aucun compte n'est utilisable. Les captchas s'ouvrent dans votre navigateur.",
+        "Wait timers and site steps handled in the background when no account can be used.",
+        "Temps d'attente et étapes du site gérés en arrière-plan quand aucun compte n'est utilisable.",
         Kind::Toggle(true),
     ),
     adv(d(
@@ -319,18 +319,27 @@ pub const DEFS: &[Def] = &[
     d(
         4,
         "captcha-mode",
-        "When a captcha is needed",
-        "Quand un captcha est demandé",
-        "BDownloader never solves captchas by itself.",
-        "BDownloader ne résout jamais un captcha tout seul.",
+        "When a site asks \"I am not a robot\"",
+        "Quand un site demande « je ne suis pas un robot »",
+        "Codes and images to copy are always typed in BDownloader.",
+        "Les codes et images à recopier se tapent toujours dans BDownloader.",
         Kind::Select {
             default: "browser",
             options: &[
                 ("browser", "Open the page in my browser", "Ouvrir la page dans mon navigateur"),
                 ("notify", "Notify me only", "Me prévenir seulement"),
-                ("skip", "Skip the file", "Ignorer le fichier"),
+                ("skip", "Skip the file (no captcha at all)", "Ignorer le fichier (aucun captcha)"),
             ],
         },
+    ),
+    d(
+        4,
+        "captcha-timeout",
+        "Wait for my answer",
+        "Attendre ma réponse",
+        "After that, the download is retried later.",
+        "Ensuite, le téléchargement sera réessayé plus tard.",
+        num(120, 20, 900, "s"),
     ),
     d(
         4,
@@ -725,12 +734,12 @@ pub fn info(id: &str) -> Option<(&'static str, &'static str)> {
             "Avec à la fois un compte premium et un service debrid pour le même hébergeur, utiliser d'abord le service debrid.",
         ),
         "free-fallback" => (
-            "Without an account, BDownloader downloads like a visitor of the site: it waits the timers the site imposes. When the site asks for a captcha, the page opens in your browser.",
-            "Sans compte, BDownloader télécharge comme un visiteur du site : il attend les délais imposés. Quand le site demande un captcha, la page s'ouvre dans votre navigateur.",
+            "Without an account, BDownloader downloads like a visitor of the site, in the background: it clicks through the free download pages and waits the timers the site imposes (the countdown shows in the list). When the site asks to copy a code, a small window lets you type it in BDownloader.",
+            "Sans compte, BDownloader télécharge comme un visiteur du site, en arrière-plan : il passe les pages de téléchargement gratuit et attend les délais imposés (le compte à rebours s'affiche dans la liste). Quand le site demande de recopier un code, une petite fenêtre vous permet de le taper dans BDownloader.",
         ),
         "captcha-mode" => (
-            "A captcha is the \"I am not a robot\" test. BDownloader never solves it for you: it opens the page in your browser, notifies you, or skips the file.",
-            "Un captcha est le test « je ne suis pas un robot ». BDownloader ne le résout jamais à votre place : il ouvre la page dans votre navigateur, vous prévient, ou ignore le fichier.",
+            "BDownloader never solves a captcha for you. Codes and images to copy are shown in BDownloader. The \"I am not a robot\" boxes (reCAPTCHA, hCaptcha, Turnstile) only work in a browser: BDownloader opens the page, notifies you, or skips the file. A debrid account avoids them.",
+            "BDownloader ne résout jamais un captcha à votre place. Les codes et images à recopier s'affichent dans BDownloader. Les cases « je ne suis pas un robot » (reCAPTCHA, hCaptcha, Turnstile) ne marchent que dans un navigateur : BDownloader ouvre la page, vous prévient, ou ignore le fichier. Un compte debrid les évite.",
         ),
         "video-container" => (
             "The file format of merged videos. mp4 plays everywhere; mkv supports more audio and subtitle tracks.",

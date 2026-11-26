@@ -78,10 +78,31 @@ fn french(text: &str) -> Option<&'static str> {
     })
 }
 
+/// Statuses with a variable part, like "Free mode, DataNodes (free) wait: 12 s".
+fn french_status(text: &str) -> Option<String> {
+    if let Some((what, left)) = text.rsplit_once(": ") {
+        if let Some(hoster) = what.strip_prefix("Free mode, ").and_then(|w| w.strip_suffix(" wait")) {
+            return Some(format!("Mode gratuit, attente {hoster} : {left}"));
+        }
+        if what == "Free mode, 1fichier asks to wait" {
+            return Some(format!("Mode gratuit, 1fichier impose une attente : {left}"));
+        }
+    }
+    Some(
+        match text {
+            "Captcha: waiting for your answer" => "Captcha : en attente de votre réponse",
+            "Getting a new IP…" => "Nouvelle adresse IP…",
+            "Type the code to continue the download" => "Tapez le code pour continuer le téléchargement",
+            _ => return None,
+        }
+        .to_owned(),
+    )
+}
+
 /// Translates a fixed English text built in Rust.
 pub fn t(text: &str) -> String {
     match LANGUAGES[CURRENT.load(Ordering::Relaxed)].0 {
-        "fr" => french(text).map(str::to_owned).unwrap_or_else(|| text.to_owned()),
+        "fr" => french(text).map(str::to_owned).or_else(|| french_status(text)).unwrap_or_else(|| text.to_owned()),
         _ => text.to_owned(),
     }
 }

@@ -505,10 +505,6 @@ fn wire_accounts(ui: &AppWindow, app: &Shared) {
             }
             state.set_form_busy(true);
             state.set_form_message(SharedString::new());
-            // Enable the matching module so the account is used right away.
-            if !app.modules.is_enabled(service.module) {
-                set_module(app, ui, service.module, true);
-            }
             check_account(app, service.id.to_owned(), username, secret, true);
         })
     });
@@ -747,6 +743,15 @@ fn wire_window(ui: &AppWindow, app: &Shared) {
     ui.on_pause_all(move || run(&|app, _| app.manager.pause_all()));
     let run = with(ui, app);
     ui.on_resume_all(move || run(&|app, _| app.manager.resume_all()));
+
+    let run = with(ui, app);
+    ui.on_captcha_answer(move |value| {
+        run(&|app, ui| crate::captcha::answer(app, ui, Some(value.to_string())));
+    });
+    let run = with(ui, app);
+    ui.on_captcha_skip(move || run(&|app, ui| crate::captcha::answer(app, ui, None)));
+    let run = with(ui, app);
+    ui.on_captcha_open_page(move || run(&|app, _| crate::captcha::open_page(app)));
 
     let run = with(ui, app);
     ui.on_input_confirm(move |value| {

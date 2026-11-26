@@ -2,7 +2,7 @@
 //! direct links through a debrid service, the hoster's official premium API,
 //! or the free mode of the site (wait timers, captchas handed to the user).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -209,7 +209,9 @@ pub enum CaptchaMode {
     Skip,
 }
 
-pub type CaptchaHandler = Arc<dyn Fn(Url, String) + Send + Sync>;
+/// Called with the page, the hoster name and the mode when a captcha can only
+/// be done in a browser.
+pub type CaptchaHandler = Arc<dyn Fn(Url, String, CaptchaMode) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct ResolverOptions {
@@ -217,21 +219,29 @@ pub struct ResolverOptions {
     pub free_fallback: bool,
     pub captcha: CaptchaMode,
     pub reconnect: Option<free::Reconnect>,
+    /// How long the in-app captcha dialog waits for the user.
+    pub captcha_timeout: std::time::Duration,
 }
 
 impl Default for ResolverOptions {
     fn default() -> Self {
-        ResolverOptions { prefer_debrid: false, free_fallback: true, captcha: CaptchaMode::Browser, reconnect: None }
+        ResolverOptions {
+            prefer_debrid: false,
+            free_fallback: true,
+            captcha: CaptchaMode::Browser,
+            reconnect: None,
+            captcha_timeout: std::time::Duration::from_secs(120),
+        }
     }
 }
 
-/// Resolves links with the user's accounts, enabled modules and options.
+/// Resolves links with the user's accounts and options.
 pub struct HosterResolver {
     client: reqwest::Client,
     credentials: RwLock<Vec<(Account, String)>>,
-    modules: RwLock<HashSet<String>>,
     options: RwLock<ResolverOptions>,
     on_captcha: RwLock<Option<CaptchaHandler>>,
+    ask_captcha: RwLock<Option<free::CaptchaFn>>,
     tokens: Mutex<HashMap<String, String>>,
 }
 
@@ -240,20 +250,15 @@ impl HosterResolver {
         Arc::new(HosterResolver {
             client,
             credentials: RwLock::default(),
-            modules: RwLock::default(),
             options: RwLock::default(),
             on_captcha: RwLock::default(),
+            ask_captcha: RwLock::default(),
             tokens: Mutex::default(),
         })
     }
 
     pub fn set_credentials(&self, credentials: Vec<(Account, String)>) {
         *self.credentials.write().unwrap_or_else(|e| e.into_inner()) = credentials;
-    }
-
-    /// Ids of enabled modules (hoster and debrid modules are checked).
-    pub fn set_enabled_modules(&self, modules: impl IntoIterator<Item = String>) {
-        *self.modules.write().unwrap_or_else(|e| e.into_inner()) = modules.into_iter().collect();
     }
 
     pub fn set_options(&self, options: ResolverOptions) {
@@ -265,15 +270,23 @@ impl HosterResolver {
         *self.on_captcha.write().unwrap_or_else(|e| e.into_inner()) = Some(handler);
     }
 
-    fn module_on(&self, module: &str) -> bool {
-        self.modules.read().unwrap_or_else(|e| e.into_inner()).contains(module)
+    /// Shows code and image captchas to the user inside the app.
+    pub fn set_captcha_ask(&self, ask: free::CaptchaFn) {
+        *self.ask_captcha.write().unwrap_or_else(|e| e.into_inner()) = Some(ask);
+    }
+
+    fn captcha_ask(&self, options: &ResolverOptions) -> Option<free::CaptchaAsk> {
+        if options.captcha == CaptchaMode::Skip {
+            return None;
+        }
+        let ask = self.ask_captcha.read().unwrap_or_else(|e| e.into_inner()).clone()?;
+        Some(free::CaptchaAsk { ask, timeout: options.captcha_timeout })
     }
 
     fn account_for(&self, service_id: &str) -> Option<(Account, String)> {
-        let module = service(service_id)?.module;
-        if !self.module_on(module) {
-            return None;
-        }
+        // Hosters and debrid services are part of the app: an enabled account
+        // is all it takes.
+        service(service_id)?;
         self.credentials
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -286,9 +299,13 @@ impl HosterResolver {
         let Some((hoster, _, free_mode)) = entry_of(url).copied() else {
             // Unknown site: a file, or an unknown XFileSharing hoster page?
             return match free::sniff(url).await {
-                free::Sniff::Xfs if self.module_on("hoster-free") => {
+                free::Sniff::Xfs => {
                     let name = url.host_str().unwrap_or("hoster").to_owned();
-                    free::xfilesharing(url, &slot, &format!("{name} (free)")).await.map_err(|e| format!("{name}: {e}"))
+                    let options = self.options.read().unwrap_or_else(|e| e.into_inner()).clone();
+                    let ask = self.captcha_ask(&options);
+                    free::xfilesharing(url, &slot, &format!("{name} (free)"), ask.as_ref())
+                        .await
+                        .map_err(|e| format!("{name}: {e}"))
                 }
                 free::Sniff::Page => Err("this link is a web page, not a file".to_owned()),
                 _ => Ok(Resolved::direct(url.clone())),
@@ -296,9 +313,7 @@ impl HosterResolver {
         };
         let options = self.options.read().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(direct) = free_direct(url) {
-            if self.module_on("hoster-free-direct") {
-                return Ok(Resolved { via: format!("{hoster} (free)"), ..Resolved::direct(direct) });
-            }
+            return Ok(Resolved { via: format!("{hoster} (free)"), ..Resolved::direct(direct) });
         }
 
         let mut errors: Vec<String> = Vec::new();
@@ -322,18 +337,19 @@ impl HosterResolver {
             }
         }
 
-        if options.free_fallback && self.module_on("hoster-free") {
+        if options.free_fallback {
             slot.set_status(Some("Free mode…"));
             let result = match free_mode {
                 Free::OneFichier => free::onefichier(url, &slot, options.reconnect.as_ref()).await,
-                Free::XFileSharing => free::xfilesharing(url, &slot, &format!("{hoster} (free)")).await,
+                Free::XFileSharing => {
+                    let ask = self.captcha_ask(&options);
+                    free::xfilesharing(url, &slot, &format!("{hoster} (free)"), ask.as_ref()).await
+                }
                 Free::MediaFire => free::mediafire(url).await,
                 Free::Gofile => free::gofile(url).await,
                 Free::GoogleDrive => free::google_drive(url).await,
                 Free::Krakenfiles => free::krakenfiles(url).await,
-                Free::Pixeldrain | Free::Dropbox => {
-                    Err(FreeError::Other("turn on the Pixeldrain and Dropbox module".into()))
-                }
+                Free::Pixeldrain | Free::Dropbox => Err(FreeError::Other("this link is not a file link".into())),
                 Free::Browser => Err(FreeError::Captcha(url.clone())),
             };
             slot.set_status(None);
@@ -342,16 +358,16 @@ impl HosterResolver {
                 Err(FreeError::Captcha(page)) => {
                     let message = match options.captcha {
                         CaptchaMode::Browser => {
-                            format!("{hoster} free mode needs a captcha: the page was opened in your browser")
+                            format!("{hoster} free mode needs a check in your browser: the page was opened there")
                         }
                         CaptchaMode::Notify => {
-                            format!("{hoster} free mode needs a captcha: open the link in your browser")
+                            format!("{hoster} free mode needs a check in your browser: open the link there")
                         }
-                        CaptchaMode::Skip => format!("{hoster} free mode needs a captcha: skipped"),
+                        CaptchaMode::Skip => format!("{hoster} free mode needs a check in a browser: skipped"),
                     };
                     if options.captcha != CaptchaMode::Skip {
                         if let Some(handler) = self.on_captcha.read().unwrap_or_else(|e| e.into_inner()).clone() {
-                            handler(page, hoster.to_owned());
+                            handler(page, hoster.to_owned(), options.captcha);
                         }
                     }
                     errors.push(message);
@@ -807,7 +823,7 @@ mod tests {
 
     #[test]
     fn hoster_domains_are_unique() {
-        let mut seen = HashSet::new();
+        let mut seen = std::collections::HashSet::new();
         for (_, domains, _) in HOSTERS {
             for d in *domains {
                 assert!(seen.insert(*d), "{d} listed twice");
@@ -831,13 +847,12 @@ mod tests {
     #[tokio::test]
     async fn captcha_hosters_hand_the_page_to_the_user() {
         let resolver = HosterResolver::new(reqwest::Client::new());
-        resolver.set_enabled_modules(["hoster-free".to_owned()]);
         let opened = Arc::new(Mutex::new(Vec::new()));
         let sink = opened.clone();
-        resolver.set_captcha_handler(Arc::new(move |page, hoster| sink.lock().unwrap().push((page, hoster))));
+        resolver.set_captcha_handler(Arc::new(move |page, hoster, _| sink.lock().unwrap().push((page, hoster))));
         let slot = Arc::new(ControlSlot::default());
         let err = resolver.resolve(&url("https://rapidgator.net/file/abc/f.rar.html"), slot).await.unwrap_err();
-        assert!(err.contains("captcha"), "{err}");
+        assert!(err.contains("browser"), "{err}");
         assert_eq!(opened.lock().unwrap()[0].1, "Rapidgator");
     }
 }

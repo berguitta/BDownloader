@@ -4,6 +4,7 @@
 
 mod actions;
 mod app;
+mod captcha;
 mod favicon;
 mod format;
 mod frame;
@@ -130,6 +131,7 @@ fn main() -> Result<()> {
         last_account_check: Instant::now(),
         awake: false,
         mini: None,
+        captchas: Default::default(),
     }));
     {
         let mut a = app.borrow_mut();
@@ -144,12 +146,13 @@ fn main() -> Result<()> {
     wiring::init_ui(&ui, &app);
     wiring::wire_all(&ui, &app);
 
-    // Captchas in free mode: hand the page to the user's browser.
+    // Captchas in free mode: code and image captchas are typed in the app;
+    // "I am not a robot" widgets can only be done in the browser.
     {
         let a = app.borrow();
-        let open_browser = a.settings.text("captcha-mode", "browser") == "browser";
-        a.resolver.set_captcha_handler(std::sync::Arc::new(move |page, hoster| {
-            if open_browser {
+        a.resolver.set_captcha_ask(captcha::ask_fn(a.sender.clone()));
+        a.resolver.set_captcha_handler(std::sync::Arc::new(move |page, hoster, mode| {
+            if mode == bd_core::hosters::CaptchaMode::Browser {
                 platform::open_url(page.as_str());
             }
             platform::notify(&format!("{hoster}: captcha"), page.as_str());
@@ -278,6 +281,18 @@ fn apply_snapshot_options(ui: &AppWindow, app: &Rc<RefCell<App>>, snapshot: &sna
                 app.refresh(&ui);
             }
         });
+    }
+    if std::env::var("BD_SNAPSHOT_CAPTCHA").is_ok() {
+        // Demo XFileSharing code captcha, to check the dialog.
+        let (reply, _answer) = tokio::sync::oneshot::channel();
+        std::mem::forget(_answer);
+        let request = bd_core::free::CaptchaRequest {
+            hoster: "Filekeeper".into(),
+            page: url::Url::parse("https://filekeeper.net/abc").expect("static url"),
+            challenge: bd_core::free::Challenge::Placed(vec![(6, '4'), (22, '8'), (38, '1'), (54, '6')]),
+            timeout: Duration::from_secs(120),
+        };
+        captcha::push(&mut app.borrow_mut(), ui, request, reply);
     }
     if let Ok(lang) = std::env::var("BD_SNAPSHOT_LANG") {
         let index = i18n::index_of(&lang);

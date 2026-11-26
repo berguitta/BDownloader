@@ -101,6 +101,89 @@ component InputDialog inherits Rectangle {
     init => { field.focus(); }
 }
 
+// One character of a code captcha, drawn where the site places it.
+export struct CaptchaChar { x: length, ch: string }
+
+// Captcha typed by the user inside the app (code or image). BDownloader
+// never reads it: it only shows what the site shows.
+component CaptchaDialog inherits Rectangle {
+    in property <string> hoster;
+    in property <image> picture;
+    in property <bool> has-picture;
+    in property <[CaptchaChar]> chars;
+    in property <int> seconds-left;
+    in property <int> waiting;
+    in-out property <string> value;
+    callback confirm(string);
+    callback skip();
+    callback open-page();
+    background: #00000066;
+    TouchArea {}
+    Rectangle {
+        width: min(440px, parent.width - 32px);
+        height: 300px;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.ln;
+        background: Theme.win;
+        drop-shadow-blur: 30px;
+        drop-shadow-color: #00000055;
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+            Text { text: @tr("Captcha for {}", root.hoster); font-size: 16px; font-weight: 600; color: Theme.ink; }
+            Text {
+                text: @tr("Type the code you see. The download continues by itself.");
+                color: Theme.mut;
+                font-size: 12.5px;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                height: 90px;
+                border-radius: 8px;
+                background: #ffffff;
+                if root.has-picture: Image {
+                    source: root.picture;
+                    height: 80px;
+                    image-fit: contain;
+                }
+                if !root.has-picture: Rectangle {
+                    width: 120px;
+                    height: 40px;
+                    for c in root.chars: Text {
+                        x: c.x * 1.4;
+                        y: 6px;
+                        text: c.ch;
+                        font-size: 22px;
+                        font-weight: 700;
+                        color: #222222;
+                    }
+                }
+            }
+            field := LineEdit {
+                text <=> root.value;
+                accepted => { root.confirm(root.value); }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    vertical-alignment: center;
+                    color: Theme.mut;
+                    font-size: 12px;
+                    text: root.waiting > 1
+                        ? @tr("{} s left · {} more waiting", root.seconds-left, root.waiting - 1)
+                        : @tr("{} s left", root.seconds-left);
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Btn { text: @tr("Open the page"); clicked => { root.open-page(); } }
+                Btn { text: @tr("Skip"); clicked => { root.skip(); } }
+                Btn { primary: true; text: @tr("OK"); clicked => { root.confirm(root.value); } }
+            }
+        }
+    }
+    init => { field.focus(); }
+}
+
 // Window control button (minimize, maximize, close) in the custom title bar.
 component WindowButton inherits Rectangle {
     in property <string> icon;
@@ -228,6 +311,18 @@ export component AppWindow inherits Window {
     in property <string> input-hint;
     in-out property <string> input-value;
     callback input-confirm(string);
+
+    in property <bool> captcha-open;
+    in property <string> captcha-hoster;
+    in property <image> captcha-picture;
+    in property <bool> captcha-has-picture;
+    in property <[CaptchaChar]> captcha-chars;
+    in property <int> captcha-seconds;
+    in property <int> captcha-waiting;
+    in-out property <string> captcha-value;
+    callback captcha-answer(string);
+    callback captcha-skip();
+    callback captcha-open-page();
 
     callback window-drag();
     callback window-resize(int);
@@ -436,6 +531,21 @@ export component AppWindow inherits Window {
         value <=> root.input-value;
         confirm(v) => { root.input-open = false; root.input-confirm(v); }
         cancel => { root.input-open = false; }
+    }
+
+    if root.captcha-open: CaptchaDialog {
+        width: 100%;
+        height: 100%;
+        hoster: root.captcha-hoster;
+        picture: root.captcha-picture;
+        has-picture: root.captcha-has-picture;
+        chars: root.captcha-chars;
+        seconds-left: root.captcha-seconds;
+        waiting: root.captcha-waiting;
+        value <=> root.captcha-value;
+        confirm(v) => { root.captcha-answer(v); }
+        skip => { root.captcha-skip(); }
+        open-page => { root.captcha-open-page(); }
     }
 
     // Toast: small card at the top center, fades and slides in.

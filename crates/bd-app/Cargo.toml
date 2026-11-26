@@ -28,7 +28,7 @@ notify-rust = "4.19.0"
 tokio-util.workspace = true
 rfd = "0.18.0"
 serde_json.workspace = true
-image = { version = "0.25.10", default-features = false, features = ["ico", "png"] }
+image = { version = "0.25.10", default-features = false, features = ["ico", "png", "jpeg", "gif"] }
 directories.workspace = true
 reqwest.workspace = true
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

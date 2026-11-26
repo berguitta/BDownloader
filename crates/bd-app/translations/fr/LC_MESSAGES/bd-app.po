@@ -604,3 +604,21 @@ msgstr "Éteindre l'ordinateur"
 msgid "Add a rule"
 msgstr "Ajouter une règle"
 
+
+msgid "Captcha for {}"
+msgstr "Captcha pour {}"
+
+msgid "Type the code you see. The download continues by itself."
+msgstr "Tapez le code affiché. Le téléchargement continue tout seul."
+
+msgid "{} s left · {} more waiting"
+msgstr "{} s restantes · {} autres en attente"
+
+msgid "{} s left"
+msgstr "{} s restantes"
+
+msgid "Open the page"
+msgstr "Ouvrir la page"
+
+msgid "Skip"
+msgstr "Ignorer"
