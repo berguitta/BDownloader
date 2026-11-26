@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/berguitta/BDownloader/security/advisories/new
+    about: Please report security problems privately.
+  - name: Why does a hoster open my browser?
+    url: https://github.com/berguitta/BDownloader/blob/main/docs/free-mode-and-captchas.md
+    about: Interactive captchas (Turnstile, reCAPTCHA, hCaptcha) always need you. Read this before reporting.

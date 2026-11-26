@@ -1,0 +1,42 @@
+name: Hoster broken
+description: A file hoster stopped working or behaves differently.
+labels: [hoster]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the hoster shows an "I am not a robot" check (Turnstile, reCAPTCHA, hCaptcha), BDownloader opens the page in your browser on purpose: see docs/free-mode-and-captchas.md. Report it here only if something else is wrong.
+  - type: input
+    id: hoster
+    attributes:
+      label: Hoster
+      placeholder: e.g. DDownload
+    validations:
+      required: true
+  - type: dropdown
+    id: route
+    attributes:
+      label: Route
+      options:
+        - Free mode (no account)
+        - Premium account
+        - Debrid account
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error shown by BDownloader
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: Public test link (optional)
+      description: Only a link to a public, harmless file you are happy to share. Never a private link.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run with `BD_LOG=bd_core=debug,info`. Remove API keys, tokens, cookies and private links first.
+      render: text
