@@ -1,10 +1,12 @@
 //! Live check of a free hoster flow against the real site. Ignored by
 //! default; run with a link of your own:
 //! `BD_FREE_URL=https://… cargo test -p bd-core --test free_live -- --ignored --nocapture`
+//! A code captcha is printed and left unanswered.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use bd_core::free;
+use bd_core::free::{self, CaptchaAsk, Challenge};
 use bd_core::task::ControlSlot;
 
 #[tokio::test]
@@ -13,7 +15,17 @@ async fn resolves_a_free_link() {
     let Ok(link) = std::env::var("BD_FREE_URL") else { return };
     let url = url::Url::parse(&link).unwrap();
     let slot = Arc::new(ControlSlot::default());
-    let result = free::xfilesharing(&url, &slot, "live (free)", None).await;
+    let ask = CaptchaAsk {
+        ask: Arc::new(|request| {
+            match &request.challenge {
+                Challenge::Image(bytes) => println!("captcha: image of {} bytes", bytes.len()),
+                Challenge::Placed(chars) => println!("captcha: {} placed characters", chars.len()),
+            }
+            Box::pin(async { None })
+        }),
+        timeout: Duration::from_secs(1),
+    };
+    let result = free::xfilesharing(&url, &slot, "live (free)", Some(&ask)).await;
     println!("{result:?}");
     assert!(result.is_ok(), "{result:?}");
 }

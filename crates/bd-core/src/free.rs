@@ -339,6 +339,8 @@ pub fn countdown(html: &str) -> Option<u64> {
         "id=\"countdown\"",
         "id=\"seconds\"",
         "var countdown =",
+        "var timeleft = parseint(",
+        "var initialtime = parseint(",
     ] {
         if let Some(pos) = lower.find(marker) {
             let digits: String = lower[pos + marker.len()..]
@@ -549,6 +551,10 @@ pub async fn xfilesharing(
     let mut file_id = page.path_segments().and_then(|mut s| s.next()).unwrap_or_default().to_owned();
     let mut first_pages = 0;
     for step in 0..5 {
+        // Development aid: BD_FREE_DUMP=<folder> saves each page of the flow.
+        if let Some(dir) = std::env::var_os("BD_FREE_DUMP") {
+            let _ = std::fs::write(std::path::Path::new(&dir).join(format!("step{step}.html")), &html);
+        }
         // Already a direct link on the page?
         if let Some(link) = file_link(&page, &html, page.host_str().unwrap_or_default()) {
             return Ok(direct(link, via));
@@ -583,7 +589,26 @@ pub async fn xfilesharing(
             }
             // The free button only becomes clickable after a few seconds
             // (datanodes): wait like a visitor would.
-            if free_button_disabled(&form.html) {
+            if html.contains("?start_countdown=1") {
+                // uploady: the page starts the timer on the server and gets
+                // the `rand` value of the form from it, then waits.
+                let start = page.join("?start_countdown=1").map_err(other)?;
+                let answer: Value = client
+                    .get(start)
+                    .header(REFERER, page.as_str())
+                    .send()
+                    .await
+                    .map_err(net)?
+                    .json()
+                    .await
+                    .map_err(other)?;
+                if let Some(rand) = answer.get("rand").and_then(Value::as_str) {
+                    fields.retain(|(k, _)| k != "rand");
+                    fields.push(("rand".into(), rand.to_owned()));
+                }
+                let seconds = countdown(&html).unwrap_or(60);
+                wait_seconds(slot, seconds + 2, &format!("Free mode, {via} wait")).await?;
+            } else if free_button_disabled(&form.html) {
                 wait_seconds(slot, 10, &format!("Free mode, {via} wait")).await?;
             }
         } else {
