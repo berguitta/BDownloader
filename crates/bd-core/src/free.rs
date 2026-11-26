@@ -60,6 +60,9 @@ fn net(e: reqwest::Error) -> FreeError {
         text.push_str(&format!(": {cause}"));
         source = cause.source();
     }
+    if e.is_connect() {
+        text = format!("cannot reach the site, it may be blocked by your internet provider ({text})");
+    }
     FreeError::Other(text)
 }
 
@@ -448,7 +451,7 @@ async fn wait_seconds(slot: &Arc<ControlSlot>, seconds: u64, what: &str) -> Free
 }
 
 async fn get_text(client: &reqwest::Client, url: &Url) -> FreeResult<(Url, String)> {
-    let response = client.get(url.clone()).send().await.map_err(other)?;
+    let response = client.get(url.clone()).send().await.map_err(net)?;
     let status = response.status();
     let final_url = response.url().clone();
     if status.as_u16() == 404 || status.as_u16() == 410 {
@@ -539,7 +542,7 @@ pub async fn xfilesharing(
         // Simple referer protection (same trick as JDownloader).
         get = get.header(REFERER, "https://datanodes.to/users");
     }
-    let response = get.send().await.map_err(other)?;
+    let response = get.send().await.map_err(net)?;
     if matches!(response.status().as_u16(), 404 | 410) {
         return Err(FreeError::Offline(format!("HTTP {}", response.status().as_u16())));
     }
