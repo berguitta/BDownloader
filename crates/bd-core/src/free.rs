@@ -13,8 +13,7 @@ use url::Url;
 
 use crate::task::{ControlSlot, Resolved};
 
-/// User agent of every free-mode request, and of the in-app browser window.
-pub const BROWSER_UA: &str =
+const BROWSER_UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 
 /// Why a free download could not be resolved automatically.
@@ -268,25 +267,6 @@ pub struct CaptchaRequest {
 
 pub type CaptchaFn =
     Arc<dyn Fn(CaptchaRequest) -> futures_util::future::BoxFuture<'static, Option<String>> + Send + Sync>;
-
-/// A page the user finishes in the in-app browser window ("I am not a robot"
-/// checks): the window catches the file download and hands it back.
-#[derive(Debug, Clone)]
-pub struct BrowserRequest {
-    pub hoster: String,
-    pub page: Url,
-}
-
-/// The file link the browser window was about to download, with the headers
-/// (cookies, user agent) that make it work outside the window.
-#[derive(Debug, Clone)]
-pub struct BrowserResult {
-    pub url: Url,
-    pub headers: Vec<(String, String)>,
-}
-
-pub type BrowserFn =
-    Arc<dyn Fn(BrowserRequest) -> futures_util::future::BoxFuture<'static, Option<BrowserResult>> + Send + Sync>;
 
 /// How to ask the user for a captcha answer, and how long to wait for it.
 #[derive(Clone)]

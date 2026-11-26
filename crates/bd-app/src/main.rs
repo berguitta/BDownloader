@@ -4,8 +4,6 @@
 
 mod actions;
 mod app;
-#[cfg(windows)]
-mod browser;
 mod captcha;
 mod favicon;
 mod format;
@@ -134,8 +132,6 @@ fn main() -> Result<()> {
         awake: false,
         mini: None,
         captchas: Default::default(),
-        #[cfg(windows)]
-        browser: Default::default(),
     }));
     {
         let mut a = app.borrow_mut();
@@ -155,8 +151,6 @@ fn main() -> Result<()> {
     {
         let a = app.borrow();
         a.resolver.set_captcha_ask(captcha::ask_fn(a.sender.clone()));
-        #[cfg(windows)]
-        a.resolver.set_browser(browser::browser_fn(a.sender.clone()));
         a.resolver.set_captcha_handler(std::sync::Arc::new(move |page, hoster, mode| {
             if mode == bd_core::hosters::CaptchaMode::Browser {
                 platform::open_url(page.as_str());
@@ -167,24 +161,6 @@ fn main() -> Result<()> {
             if let Some(path) = bd_core::tools::find(bd_core::tools::Tool::YtDlp) {
                 platform::run_hidden(&path, &["-U"]);
             }
-        }
-    }
-    // Development aid: BD_BROWSER_TEST=<page> opens the browser window on it.
-    #[cfg(windows)]
-    if let Ok(page) = std::env::var("BD_BROWSER_TEST") {
-        if let Ok(page) = url::Url::parse(&page) {
-            let (weak, a) = (ui.as_weak(), app.clone());
-            Timer::single_shot(Duration::from_millis(1500), move || {
-                let Some(ui) = weak.upgrade() else { return };
-                let (reply, answer) = tokio::sync::oneshot::channel();
-                let request = bd_core::free::BrowserRequest { hoster: "Test".into(), page: page.clone() };
-                let mut app = a.borrow_mut();
-                app.runtime.spawn(async move {
-                    let result = answer.await;
-                    tracing::info!(result = ?result, "browser test finished");
-                });
-                browser::push(&mut app, &ui, request, reply);
-            });
         }
     }
     let start_hidden = std::env::args().any(|a| a == "--minimized") && app.borrow().tray.is_some();

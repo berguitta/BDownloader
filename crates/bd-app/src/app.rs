@@ -56,8 +56,6 @@ pub enum UiMsg {
     Toast(String),
     /// Free mode asks the user to type a captcha.
     Captcha(bd_core::free::CaptchaRequest, tokio::sync::oneshot::Sender<Option<String>>),
-    /// Free mode needs a check only a browser can do.
-    Browser(bd_core::free::BrowserRequest, tokio::sync::oneshot::Sender<Option<bd_core::free::BrowserResult>>),
     Checksums {
         package: String,
         results: Vec<bd_core::checksum::CheckResult>,
@@ -119,8 +117,6 @@ pub struct App {
     pub awake: bool,
     pub mini: Option<crate::MiniWindow>,
     pub captchas: crate::captcha::Queue,
-    #[cfg(windows)]
-    pub browser: crate::browser::Browser,
 }
 
 impl App {
@@ -456,8 +452,6 @@ impl App {
     pub fn refresh(&mut self, ui: &AppWindow) {
         self.handle_messages(ui);
         crate::captcha::refresh(self, ui);
-        #[cfg(windows)]
-        crate::browser::refresh(self, ui);
         self.handle_events();
         self.refresh_downloads(ui);
         self.refresh_grabber(ui, false);
@@ -963,13 +957,6 @@ impl App {
                 }
                 UiMsg::Toast(text) => self.toast(text),
                 UiMsg::Captcha(request, reply) => crate::captcha::push(self, ui, request, reply),
-                #[cfg(windows)]
-                UiMsg::Browser(request, reply) => crate::browser::push(self, ui, request, reply),
-                #[cfg(not(windows))]
-                UiMsg::Browser(request, reply) => {
-                    platform::open_url(request.page.as_str());
-                    let _ = reply.send(None);
-                }
                 UiMsg::Checksums { package, results } => {
                     let bad: Vec<String> = results
                         .iter()

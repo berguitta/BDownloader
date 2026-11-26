@@ -91,10 +91,6 @@ fn french_status(text: &str) -> Option<String> {
     Some(
         match text {
             "Captcha: waiting for your answer" => "Captcha : en attente de votre réponse",
-            "Browser check: finish it in the BDownloader window" => {
-                "Vérification navigateur : à terminer dans la fenêtre de BDownloader"
-            }
-            "Finish the check in BDownloader" => "Terminez la vérification dans BDownloader",
             "Getting a new IP…" => "Nouvelle adresse IP…",
             "Type the code to continue the download" => "Tapez le code pour continuer le téléchargement",
             _ => return None,

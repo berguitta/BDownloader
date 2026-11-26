@@ -752,13 +752,6 @@ fn wire_window(ui: &AppWindow, app: &Shared) {
     ui.on_captcha_skip(move || run(&|app, ui| crate::captcha::answer(app, ui, None)));
     let run = with(ui, app);
     ui.on_captcha_open_page(move || run(&|app, _| crate::captcha::open_page(app)));
-    #[cfg(windows)]
-    {
-        let run = with(ui, app);
-        ui.on_browser_cancel(move || run(&|app, ui| crate::browser::cancel(app, ui, false)));
-        let run = with(ui, app);
-        ui.on_browser_external(move || run(&|app, ui| crate::browser::cancel(app, ui, true)));
-    }
 
     let run = with(ui, app);
     ui.on_input_confirm(move |value| {
